@@ -51,6 +51,7 @@ main(int argc, char** argv)
 	printf("venus capset: wire_format %u vk_xml %#x ext_serialization %u "
 		"venus_protocol %u blob_id_0 %u\n", capset[0], capset[1], capset[2],
 		capset[3], capset[4]);
+	printf("venus capset: allow_vk_wait_syncs %u supports_multiple_timelines %u use_guest_vram %u\n", capset[37], capset[38], capset[39]);
 
 	const char* name = "vgtest";
 	virtio_gpu_3d_context_set_param params[] = {

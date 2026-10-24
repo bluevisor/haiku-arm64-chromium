@@ -1,0 +1,36 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>WebGL probe</title>
+<canvas id="c" width="256" height="256"></canvas>
+<pre id="out"></pre>
+<script>
+const lines = [];
+function probe(kind) {
+  const gl = document.createElement('canvas').getContext(kind);
+  if (!gl) return kind + '=no';
+  const dbg = gl.getExtension('WEBGL_debug_renderer_info');
+  const r = dbg ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER);
+  return kind + '=yes version="' + gl.getParameter(gl.VERSION) + '" renderer="' + r + '"';
+}
+lines.push(probe('webgl'));
+lines.push(probe('webgl2'));
+// Draw a red triangle in WebGL2 and read back the center pixel.
+try {
+  const gl = document.getElementById('c').getContext('webgl2');
+  const sh = (t, s) => { const o = gl.createShader(t); gl.shaderSource(o, s); gl.compileShader(o); return o; };
+  const p = gl.createProgram();
+  gl.attachShader(p, sh(gl.VERTEX_SHADER, '#version 300 es\nin vec2 a;void main(){gl_Position=vec4(a,0,1);}'));
+  gl.attachShader(p, sh(gl.FRAGMENT_SHADER, '#version 300 es\nprecision mediump float;out vec4 o;void main(){o=vec4(1,0,0,1);}'));
+  gl.linkProgram(p); gl.useProgram(p);
+  gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 1,-1, 0,1]), gl.STATIC_DRAW);
+  gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+  gl.clearColor(0, 0, 1, 1); gl.clear(gl.COLOR_BUFFER_BIT);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  const px = new Uint8Array(4); gl.readPixels(128, 100, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+  lines.push('draw center=' + Array.from(px).join(',') + (px[0] === 255 && px[2] === 0 ? ' OK' : ' WRONG'));
+} catch (e) { lines.push('draw error=' + e); }
+document.getElementById('out').textContent = lines.join('\n');
+document.title = lines.map(l => l.split(' ')[0]).join(' ');
+for (const l of lines) console.log('WEBGLPROBE ' + l);
+</script>

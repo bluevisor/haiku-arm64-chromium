@@ -1,0 +1,48 @@
+diff --git a/src/libANGLE/renderer/vulkan/vk_helpers.cpp b/src/libANGLE/renderer/vulkan/vk_helpers.cpp
+index b5142fa..efe1714 100644
+--- a/src/libANGLE/renderer/vulkan/vk_helpers.cpp
++++ b/src/libANGLE/renderer/vulkan/vk_helpers.cpp
+@@ -7059,8 +7059,7 @@ angle::Result ImageHelper::initImplicitMultisampledRenderToTexture(
+     // based on whether the memory that will be used to create the image would have
+     // VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT.  TRANSIENT is provided if there is any memory that
+     // supports LAZILY_ALLOCATED.  However, based on actual image requirements, such a memory may
+-    // not be suitable for the image.  We don't support such a case, which will result in the
+-    // |initMemory| call below failing.
++    // not be suitable for the image, in which case the image goes in regular device memory.
+     const bool hasLazilyAllocatedMemory =
+         context->getRenderer()->getMemoryProperties().hasLazilyAllocatedMemory();
+ 
+@@ -7104,9 +7103,32 @@ angle::Result ImageHelper::initImplicitMultisampledRenderToTexture(
+     // staged on the resolve image if needed.
+     removeStagedUpdates(context, getFirstAllocatedLevel(), getLastAllocatedLevel());
+ 
++    // The device having lazily allocated memory doesn't mean this image may use it: Venus on
++    // Apple GPUs leaves it out of the memory types of these mutable-format input attachments.
++    // A transient image is valid in any memory type, so only ask for lazy memory if one of the
++    // image's types has it.
++    bool useLazilyAllocatedMemory = false;
++    if (hasLazilyAllocatedMemory)
++    {
++        VkMemoryRequirements memoryRequirements;
++        mImage.getMemoryRequirements(context->getRenderer()->getDevice(), &memoryRequirements);
++        const MemoryProperties &memoryProperties = context->getRenderer()->getMemoryProperties();
++        for (uint32_t typeIndex = 0; typeIndex < memoryProperties.getMemoryTypeCount();
++             ++typeIndex)
++        {
++            if ((memoryRequirements.memoryTypeBits & (1u << typeIndex)) != 0 &&
++                (memoryProperties.getMemoryType(typeIndex).propertyFlags &
++                 VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT) != 0)
++            {
++                useLazilyAllocatedMemory = true;
++                break;
++            }
++        }
++    }
++
+     const VkMemoryPropertyFlags kMultisampledMemoryFlags =
+         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT |
+-        (hasLazilyAllocatedMemory ? VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT : 0) |
++        (useLazilyAllocatedMemory ? VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT : 0) |
+         (hasProtectedContent ? VK_MEMORY_PROPERTY_PROTECTED_BIT : 0);
+ 
+     // If this ever fails, it can be retried without the LAZILY_ALLOCATED flag (which will probably
