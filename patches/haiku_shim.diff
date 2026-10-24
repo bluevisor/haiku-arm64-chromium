@@ -1,5 +1,5 @@
 diff --git a/haiku_shim/haiku_shim.cc b/haiku_shim/haiku_shim.cc
-index 611b7da..9080ae4 100644
+index 611b7da..844bbdb 100644
 --- a/haiku_shim/haiku_shim.cc
 +++ b/haiku_shim/haiku_shim.cc
 @@ -892,7 +892,11 @@ class BrowserChromeView : public BView, public BookmarkOpener {
@@ -68,7 +68,7 @@ index 611b7da..9080ae4 100644
  };
  
  }  // namespace
-@@ -1175,9 +1190,10 @@ extern "C" NativeWindow* HaikuShimCreateWindow(float x,
+@@ -1175,9 +1190,16 @@ extern "C" NativeWindow* HaikuShimCreateWindow(float x,
                                                 float height,
                                                 bool has_frame,
                                                 bool with_toolbar,
@@ -76,6 +76,12 @@ index 611b7da..9080ae4 100644
                                                 Delegate* delegate) {
    BRect frame(x, y, x + width - 1, y + height - 1);
 -  return new ShimWindow(frame, has_frame, with_toolbar, delegate);
++  // A popup is never decorated and never carries the toolbar, whatever the
++  // caller asked for its frame.
++  if (popup) {
++    has_frame = false;
++    with_toolbar = false;
++  }
 +  return new ShimWindow(frame, has_frame, with_toolbar, popup, delegate);
  }
  
