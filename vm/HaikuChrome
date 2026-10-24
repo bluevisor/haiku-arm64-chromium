@@ -1,0 +1,23 @@
+#!/bin/sh
+# Launcher for the full //chrome build (not R Chromium's content_shell).
+self="$(readlink -f "$0" 2>/dev/null || echo "$0")"
+cd "$(dirname "$self")" || exit 1
+# lib/ holds the BeAPI shim and SwiftShader's Vulkan driver as libvulkan.so.1,
+# which ANGLE dlopens (through volk) for WebGL.
+LIBRARY_PATH="%A/lib:$LIBRARY_PATH"
+export LIBRARY_PATH
+# Deskbar shows a running app with its executable's icon. A deploy from Linux
+# drops BFS attributes, so put the icon back when it's missing.
+if ! catattr BEOS:ICON ./Chromium >/dev/null 2>&1 && [ -f chrome.hvif ]; then
+	addattr -t icon -f chrome.hvif BEOS:ICON ./Chromium
+fi
+dark=
+if ./ui_is_dark 2>/dev/null; then
+	dark="--force-dark-mode"
+fi
+exec ./Chromium --ozone-platform=haiku --no-sandbox --single-process \
+	--in-process-gpu --disable-gpu-compositing \
+	--use-angle=swiftshader --enable-unsafe-swiftshader \
+	--use-fake-device-for-media-stream \
+	--user-data-dir=/boot/home/config/settings/HaikuChrome \
+	$dark "$@"

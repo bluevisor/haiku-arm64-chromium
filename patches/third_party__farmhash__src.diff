@@ -1,0 +1,18 @@
+diff --git a/src/farmhash.cc b/src/farmhash.cc
+index cfd4a47..1ddf9a2 100644
+--- a/src/farmhash.cc
++++ b/src/farmhash.cc
+@@ -165,6 +165,13 @@
+ #define bswap_64(x) bswap64(x)
+ #endif
+ 
++#elif defined(__HAIKU__)
++
++#undef bswap_32
++#undef bswap_64
++#define bswap_32(x) __builtin_bswap32(x)
++#define bswap_64(x) __builtin_bswap64(x)
++
+ #else
+ 
+ #undef bswap_32

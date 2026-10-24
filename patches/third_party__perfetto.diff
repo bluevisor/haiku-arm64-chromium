@@ -1,0 +1,389 @@
+diff --git a/include/perfetto/base/build_config.h b/include/perfetto/base/build_config.h
+index 0c519a31..9855963d 100644
+--- a/include/perfetto/base/build_config.h
++++ b/include/perfetto/base/build_config.h
+@@ -148,6 +148,20 @@
+ #define PERFETTO_BUILDFLAG_DEFINE_PERFETTO_OS_QNX() 0
+ #define PERFETTO_BUILDFLAG_DEFINE_PERFETTO_OS_APPLE_TVOS() 0
+ #define PERFETTO_BUILDFLAG_DEFINE_PERFETTO_OS_FREEBSD() 0
++#elif defined(__HAIKU__)
++#define PERFETTO_BUILDFLAG_DEFINE_PERFETTO_OS_ANDROID() 0
++#define PERFETTO_BUILDFLAG_DEFINE_PERFETTO_OS_LINUX() 0
++#define PERFETTO_BUILDFLAG_DEFINE_PERFETTO_OS_LINUX_BUT_NOT_QNX() 0
++#define PERFETTO_BUILDFLAG_DEFINE_PERFETTO_OS_WIN() 0
++#define PERFETTO_BUILDFLAG_DEFINE_PERFETTO_OS_APPLE() 0
++#define PERFETTO_BUILDFLAG_DEFINE_PERFETTO_OS_MAC() 0
++#define PERFETTO_BUILDFLAG_DEFINE_PERFETTO_OS_IOS() 0
++#define PERFETTO_BUILDFLAG_DEFINE_PERFETTO_OS_WASM() 0
++#define PERFETTO_BUILDFLAG_DEFINE_PERFETTO_OS_FUCHSIA() 0
++#define PERFETTO_BUILDFLAG_DEFINE_PERFETTO_OS_NACL() 0
++#define PERFETTO_BUILDFLAG_DEFINE_PERFETTO_OS_QNX() 0
++#define PERFETTO_BUILDFLAG_DEFINE_PERFETTO_OS_APPLE_TVOS() 0
++#define PERFETTO_BUILDFLAG_DEFINE_PERFETTO_OS_FREEBSD() 0
+ #elif defined(__FreeBSD__)
+ #define PERFETTO_BUILDFLAG_DEFINE_PERFETTO_OS_ANDROID() 0
+ #define PERFETTO_BUILDFLAG_DEFINE_PERFETTO_OS_LINUX() 0
+diff --git a/include/perfetto/base/thread_utils.h b/include/perfetto/base/thread_utils.h
+index 0cc0803f..5a5f42b9 100644
+--- a/include/perfetto/base/thread_utils.h
++++ b/include/perfetto/base/thread_utils.h
+@@ -43,6 +43,9 @@ __declspec(dllimport) unsigned long __stdcall GetCurrentThreadId();
+ #if PERFETTO_BUILDFLAG(PERFETTO_OS_FREEBSD)
+ #include <pthread_np.h>
+ #endif
++#if defined(__HAIKU__)
++#include <OS.h>  // find_thread
++#endif
+ 
+ namespace perfetto {
+ namespace base {
+@@ -58,6 +61,11 @@ using PlatformThreadId = pid_t;
+ inline PlatformThreadId GetThreadId() {
+   return static_cast<pid_t>(syscall(__NR_gettid));
+ }
++#elif defined(__HAIKU__)
++using PlatformThreadId = int32_t;
++inline PlatformThreadId GetThreadId() {
++  return static_cast<int32_t>(find_thread(nullptr));
++}
+ #elif PERFETTO_BUILDFLAG(PERFETTO_OS_FUCHSIA)
+ using PlatformThreadId = zx_koid_t;
+ // Not inlined because the result is cached internally.
+diff --git a/include/perfetto/base/time.h b/include/perfetto/base/time.h
+index 367a7b95..e7bfacbc 100644
+--- a/include/perfetto/base/time.h
++++ b/include/perfetto/base/time.h
+@@ -20,6 +20,12 @@
+ #include <stdint.h>
+ #include <time.h>
+ 
++#if defined(__HAIKU__)
++// timegm lives in libroot but is declared in <bsd/time.h>, which is not
++// on the include path here; <time.h> alone does not bring it in.
++#include <bsd/time.h>
++#endif
++
+ #include <chrono>
+ #include <optional>
+ #include <string>
+@@ -282,9 +288,15 @@ inline TimeNanos GetTimeInternalNs(clockid_t clk_id) {
+ inline TimeNanos GetBootTimeNs() {
+   // Determine if CLOCK_BOOTTIME is available on the first call.
+   static const clockid_t kBootTimeClockSource = [] {
++#if defined(CLOCK_BOOTTIME)
+     struct timespec ts = {};
+     int res = clock_gettime(CLOCK_BOOTTIME, &ts);
+     return res == 0 ? CLOCK_BOOTTIME : kWallTimeClockSource;
++#else
++    // No boot-time clock on this platform; the wall clock is the
++    // fallback this function already used when the probe failed.
++    return kWallTimeClockSource;
++#endif
+   }();
+   return GetTimeInternalNs(kBootTimeClockSource);
+ }
+@@ -294,7 +306,7 @@ inline TimeNanos GetWallTimeNs() {
+ }
+ 
+ inline TimeNanos GetWallTimeRawNs() {
+-#if (PERFETTO_BUILDFLAG(PERFETTO_OS_FREEBSD))
++#if (PERFETTO_BUILDFLAG(PERFETTO_OS_FREEBSD)) || !defined(CLOCK_MONOTONIC_RAW)
+   // Note: CLOCK_MONOTONIC_RAW is a Linux extension.
+   // FreeBSD doesn't implement it and its CLOCK_MONOTONIC_FAST
+   // doesnt implement the same semantics as CLOCK_MONOTONIC_RAW.
+diff --git a/include/perfetto/ext/base/scoped_mmap.h b/include/perfetto/ext/base/scoped_mmap.h
+index 6334bcfd..62b0b2df 100644
+--- a/include/perfetto/ext/base/scoped_mmap.h
++++ b/include/perfetto/ext/base/scoped_mmap.h
+@@ -24,7 +24,8 @@
+ 
+ #if PERFETTO_BUILDFLAG(PERFETTO_OS_LINUX) ||   \
+     PERFETTO_BUILDFLAG(PERFETTO_OS_APPLE) ||   \
+-    PERFETTO_BUILDFLAG(PERFETTO_OS_FREEBSD) || \
++    PERFETTO_BUILDFLAG(PERFETTO_OS_FREEBSD) ||   \
++    defined(__HAIKU__) || \
+     PERFETTO_BUILDFLAG(PERFETTO_OS_ANDROID) || \
+     PERFETTO_BUILDFLAG(PERFETTO_OS_WIN)
+ #define PERFETTO_HAS_MMAP() 1
+diff --git a/src/base/clock_snapshots.cc b/src/base/clock_snapshots.cc
+index 937e7e6f..c2709c38 100644
+--- a/src/base/clock_snapshots.cc
++++ b/src/base/clock_snapshots.cc
+@@ -24,7 +24,8 @@ namespace perfetto::base {
+ 
+ ClockSnapshotVector CaptureClockSnapshots() {
+   ClockSnapshotVector snapshot_data;
+-#if !PERFETTO_BUILDFLAG(PERFETTO_OS_APPLE) &&   \
++#if !defined(__HAIKU__) &&                      \
++    !PERFETTO_BUILDFLAG(PERFETTO_OS_APPLE) &&   \
+     !PERFETTO_BUILDFLAG(PERFETTO_OS_WIN) &&     \
+     !PERFETTO_BUILDFLAG(PERFETTO_OS_FREEBSD) && \
+     !PERFETTO_BUILDFLAG(PERFETTO_OS_NACL) &&    \
+diff --git a/src/base/file_utils.cc b/src/base/file_utils.cc
+index 3f7bb17b..eaf8c95f 100644
+--- a/src/base/file_utils.cc
++++ b/src/base/file_utils.cc
+@@ -51,7 +51,8 @@
+ 
+ #if PERFETTO_BUILDFLAG(PERFETTO_OS_LINUX) ||   \
+     PERFETTO_BUILDFLAG(PERFETTO_OS_ANDROID) || \
+-    PERFETTO_BUILDFLAG(PERFETTO_OS_FREEBSD) || \
++    PERFETTO_BUILDFLAG(PERFETTO_OS_FREEBSD) ||   \
++    defined(__HAIKU__) || \
+     PERFETTO_BUILDFLAG(PERFETTO_OS_APPLE)
+ #define PERFETTO_SET_FILE_PERMISSIONS
+ #include <fcntl.h>
+diff --git a/src/base/scoped_mmap.cc b/src/base/scoped_mmap.cc
+index e8be0f4d..001d21e8 100644
+--- a/src/base/scoped_mmap.cc
++++ b/src/base/scoped_mmap.cc
+@@ -23,7 +23,8 @@
+ 
+ #if PERFETTO_BUILDFLAG(PERFETTO_OS_LINUX) ||   \
+     PERFETTO_BUILDFLAG(PERFETTO_OS_ANDROID) || \
+-    PERFETTO_BUILDFLAG(PERFETTO_OS_FREEBSD) || \
++    PERFETTO_BUILDFLAG(PERFETTO_OS_FREEBSD) ||   \
++    defined(__HAIKU__) || \
+     PERFETTO_BUILDFLAG(PERFETTO_OS_APPLE)
+ #include <sys/mman.h>
+ #include <unistd.h>
+diff --git a/src/base/subprocess_posix.cc b/src/base/subprocess_posix.cc
+index cc7a4102..d6a4df45 100644
+--- a/src/base/subprocess_posix.cc
++++ b/src/base/subprocess_posix.cc
+@@ -20,7 +20,8 @@
+ 
+ #if PERFETTO_BUILDFLAG(PERFETTO_OS_LINUX) ||   \
+     PERFETTO_BUILDFLAG(PERFETTO_OS_ANDROID) || \
+-    PERFETTO_BUILDFLAG(PERFETTO_OS_FREEBSD) || \
++    PERFETTO_BUILDFLAG(PERFETTO_OS_FREEBSD) ||   \
++    defined(__HAIKU__) || \
+     PERFETTO_BUILDFLAG(PERFETTO_OS_APPLE)
+ 
+ #include <fcntl.h>
+diff --git a/src/base/test/vm_test_utils.cc b/src/base/test/vm_test_utils.cc
+index 16ac2780..d264974c 100644
+--- a/src/base/test/vm_test_utils.cc
++++ b/src/base/test/vm_test_utils.cc
+@@ -96,6 +96,11 @@ bool IsMapped(void* start, size_t size) {
+   // mincore isn't available on NaCL.
+   ignore_result(page_size);
+   return true;
++#elif defined(__HAIKU__)
++  // Haiku has no mincore(); page residency is unmeasurable, so assume
++  // resident.
++  ignore_result(page_size);
++  return true;
+ #else
+ #if PERFETTO_BUILDFLAG(PERFETTO_OS_APPLE) || \
+     PERFETTO_BUILDFLAG(PERFETTO_OS_FREEBSD)
+diff --git a/src/base/utils.cc b/src/base/utils.cc
+index 3b296473..7fa57a92 100644
+--- a/src/base/utils.cc
++++ b/src/base/utils.cc
+@@ -27,7 +27,8 @@
+ #if PERFETTO_BUILDFLAG(PERFETTO_OS_LINUX) ||   \
+     PERFETTO_BUILDFLAG(PERFETTO_OS_ANDROID) || \
+     PERFETTO_BUILDFLAG(PERFETTO_OS_APPLE) ||   \
+-    PERFETTO_BUILDFLAG(PERFETTO_OS_FREEBSD) || \
++    PERFETTO_BUILDFLAG(PERFETTO_OS_FREEBSD) ||   \
++    defined(__HAIKU__) || \
+     PERFETTO_BUILDFLAG(PERFETTO_OS_FUCHSIA)
+ #include <limits.h>
+ #include <stdlib.h>  // For _exit()
+diff --git a/src/ipc/host_impl.cc b/src/ipc/host_impl.cc
+index 3cd125ed..aed5afa1 100644
+--- a/src/ipc/host_impl.cc
++++ b/src/ipc/host_impl.cc
+@@ -92,7 +92,8 @@ base::MachineID GenerateMachineID(base::UnixSocket* sock,
+ uid_t HostImpl::ClientConnection::GetPosixPeerUid() const {
+ #if PERFETTO_BUILDFLAG(PERFETTO_OS_LINUX) ||   \
+     PERFETTO_BUILDFLAG(PERFETTO_OS_ANDROID) || \
+-    PERFETTO_BUILDFLAG(PERFETTO_OS_FREEBSD) || \
++    PERFETTO_BUILDFLAG(PERFETTO_OS_FREEBSD) ||   \
++    defined(__HAIKU__) || \
+     PERFETTO_BUILDFLAG(PERFETTO_OS_APPLE)
+   if (sock->family() == base::SockFamily::kUnix)
+     return sock->peer_uid_posix();
+diff --git a/src/tools/busy_threads/busy_threads.cc b/src/tools/busy_threads/busy_threads.cc
+index c4b5242e..95788b07 100644
+--- a/src/tools/busy_threads/busy_threads.cc
++++ b/src/tools/busy_threads/busy_threads.cc
+@@ -30,7 +30,8 @@
+ #define PERFETTO_HAVE_PTHREADS                \
+   (PERFETTO_BUILDFLAG(PERFETTO_OS_LINUX) ||   \
+    PERFETTO_BUILDFLAG(PERFETTO_OS_ANDROID) || \
+-   PERFETTO_BUILDFLAG(PERFETTO_OS_FREEBSD) || \
++   PERFETTO_BUILDFLAG(PERFETTO_OS_FREEBSD) ||   \
++    defined(__HAIKU__) || \
+    PERFETTO_BUILDFLAG(PERFETTO_OS_APPLE))
+ 
+ #if PERFETTO_HAVE_PTHREADS
+diff --git a/src/trace_processor/rpc/unixd.cc b/src/trace_processor/rpc/unixd.cc
+index 560bf56c..6b0969cc 100644
+--- a/src/trace_processor/rpc/unixd.cc
++++ b/src/trace_processor/rpc/unixd.cc
+@@ -40,7 +40,8 @@
+ 
+ #if PERFETTO_BUILDFLAG(PERFETTO_OS_LINUX) ||   \
+     PERFETTO_BUILDFLAG(PERFETTO_OS_ANDROID) || \
+-    PERFETTO_BUILDFLAG(PERFETTO_OS_FREEBSD) || \
++    PERFETTO_BUILDFLAG(PERFETTO_OS_FREEBSD) ||   \
++    defined(__HAIKU__) || \
+     PERFETTO_BUILDFLAG(PERFETTO_OS_APPLE)
+ #define PERFETTO_TP_UNIXD_POSIX() 1
+ #include <unistd.h>
+diff --git a/src/trace_processor/shell/interactive.cc b/src/trace_processor/shell/interactive.cc
+index 6fcb2e81..8a9f68c0 100644
+--- a/src/trace_processor/shell/interactive.cc
++++ b/src/trace_processor/shell/interactive.cc
+@@ -64,7 +64,8 @@ std::string GetConfigPath() {
+   const char* homedir = getenv("HOME");
+ #if PERFETTO_BUILDFLAG(PERFETTO_OS_LINUX) ||   \
+     PERFETTO_BUILDFLAG(PERFETTO_OS_ANDROID) || \
+-    PERFETTO_BUILDFLAG(PERFETTO_OS_FREEBSD) || \
++    PERFETTO_BUILDFLAG(PERFETTO_OS_FREEBSD) ||   \
++    defined(__HAIKU__) || \
+     PERFETTO_BUILDFLAG(PERFETTO_OS_APPLE)
+   if (homedir == nullptr)
+     homedir = getpwuid(getuid())->pw_dir;
+diff --git a/src/trace_processor/shell/interactive_subcommand.cc b/src/trace_processor/shell/interactive_subcommand.cc
+index 9993ed00..211c2a26 100644
+--- a/src/trace_processor/shell/interactive_subcommand.cc
++++ b/src/trace_processor/shell/interactive_subcommand.cc
+@@ -29,7 +29,8 @@
+ 
+ #if PERFETTO_BUILDFLAG(PERFETTO_OS_LINUX) ||   \
+     PERFETTO_BUILDFLAG(PERFETTO_OS_ANDROID) || \
+-    PERFETTO_BUILDFLAG(PERFETTO_OS_FREEBSD) || \
++    PERFETTO_BUILDFLAG(PERFETTO_OS_FREEBSD) ||   \
++    defined(__HAIKU__) || \
+     PERFETTO_BUILDFLAG(PERFETTO_OS_APPLE)
+ #define PERFETTO_HAS_SIGNAL_H() 1
+ #include <signal.h>
+diff --git a/src/trace_processor/shell/query_subcommand.cc b/src/trace_processor/shell/query_subcommand.cc
+index d2c95eb0..1c9cd765 100644
+--- a/src/trace_processor/shell/query_subcommand.cc
++++ b/src/trace_processor/shell/query_subcommand.cc
+@@ -50,7 +50,8 @@
+ 
+ #if PERFETTO_BUILDFLAG(PERFETTO_OS_LINUX) ||   \
+     PERFETTO_BUILDFLAG(PERFETTO_OS_ANDROID) || \
+-    PERFETTO_BUILDFLAG(PERFETTO_OS_FREEBSD) || \
++    PERFETTO_BUILDFLAG(PERFETTO_OS_FREEBSD) ||   \
++    defined(__HAIKU__) || \
+     PERFETTO_BUILDFLAG(PERFETTO_OS_APPLE)
+ #define PERFETTO_HAS_SIGNAL_H() 1
+ #include <signal.h>
+diff --git a/src/trace_processor/shell/server_subcommand.cc b/src/trace_processor/shell/server_subcommand.cc
+index 9a2697b2..244a9dde 100644
+--- a/src/trace_processor/shell/server_subcommand.cc
++++ b/src/trace_processor/shell/server_subcommand.cc
+@@ -53,7 +53,8 @@
+ 
+ #if PERFETTO_BUILDFLAG(PERFETTO_OS_LINUX) ||   \
+     PERFETTO_BUILDFLAG(PERFETTO_OS_ANDROID) || \
+-    PERFETTO_BUILDFLAG(PERFETTO_OS_FREEBSD) || \
++    PERFETTO_BUILDFLAG(PERFETTO_OS_FREEBSD) ||   \
++    defined(__HAIKU__) || \
+     PERFETTO_BUILDFLAG(PERFETTO_OS_APPLE)
+ #define PERFETTO_HAS_SIGNAL_H() 1
+ #include <signal.h>
+diff --git a/src/trace_processor/trace_processor_shell.cc b/src/trace_processor/trace_processor_shell.cc
+index 9c9eef49..0f5e7054 100644
+--- a/src/trace_processor/trace_processor_shell.cc
++++ b/src/trace_processor/trace_processor_shell.cc
+@@ -76,7 +76,8 @@
+ 
+ #if PERFETTO_BUILDFLAG(PERFETTO_OS_LINUX) ||   \
+     PERFETTO_BUILDFLAG(PERFETTO_OS_ANDROID) || \
+-    PERFETTO_BUILDFLAG(PERFETTO_OS_FREEBSD) || \
++    PERFETTO_BUILDFLAG(PERFETTO_OS_FREEBSD) ||   \
++    defined(__HAIKU__) || \
+     PERFETTO_BUILDFLAG(PERFETTO_OS_APPLE)
+ #define PERFETTO_HAS_SIGNAL_H() 1
+ #else
+diff --git a/src/traced_relay/relay_service.cc b/src/traced_relay/relay_service.cc
+index c4b94008..d0c7e278 100644
+--- a/src/traced_relay/relay_service.cc
++++ b/src/traced_relay/relay_service.cc
+@@ -45,7 +45,8 @@
+ 
+ #if PERFETTO_BUILDFLAG(PERFETTO_OS_ANDROID) || \
+     PERFETTO_BUILDFLAG(PERFETTO_OS_LINUX) ||   \
+-    PERFETTO_BUILDFLAG(PERFETTO_OS_FREEBSD) || \
++    PERFETTO_BUILDFLAG(PERFETTO_OS_FREEBSD) ||   \
++    defined(__HAIKU__) || \
+     PERFETTO_BUILDFLAG(PERFETTO_OS_APPLE)
+ #include <fcntl.h>
+ #include <sys/stat.h>
+diff --git a/src/tracing/ipc/default_socket.cc b/src/tracing/ipc/default_socket.cc
+index 7c834939..201b1f7b 100644
+--- a/src/tracing/ipc/default_socket.cc
++++ b/src/tracing/ipc/default_socket.cc
+@@ -28,7 +28,8 @@
+ 
+ #if PERFETTO_BUILDFLAG(PERFETTO_OS_LINUX) ||   \
+     PERFETTO_BUILDFLAG(PERFETTO_OS_ANDROID) || \
+-    PERFETTO_BUILDFLAG(PERFETTO_OS_FREEBSD) || \
++    PERFETTO_BUILDFLAG(PERFETTO_OS_FREEBSD) ||   \
++    defined(__HAIKU__) || \
+     PERFETTO_BUILDFLAG(PERFETTO_OS_APPLE)
+ #include <unistd.h>
+ #endif
+diff --git a/src/tracing/ipc/posix_shared_memory.cc b/src/tracing/ipc/posix_shared_memory.cc
+index e7176ba1..ccde27ce 100644
+--- a/src/tracing/ipc/posix_shared_memory.cc
++++ b/src/tracing/ipc/posix_shared_memory.cc
+@@ -20,7 +20,8 @@
+     PERFETTO_BUILDFLAG(PERFETTO_OS_ANDROID) || \
+     PERFETTO_BUILDFLAG(PERFETTO_OS_APPLE) ||   \
+     PERFETTO_BUILDFLAG(PERFETTO_OS_FUCHSIA) || \
+-    PERFETTO_BUILDFLAG(PERFETTO_OS_FREEBSD) || \
++    PERFETTO_BUILDFLAG(PERFETTO_OS_FREEBSD) ||   \
++    defined(__HAIKU__) || \
+     PERFETTO_BUILDFLAG(PERFETTO_OS_WASM)
+ 
+ #include <fcntl.h>
+diff --git a/src/tracing/ipc/posix_shared_memory.h b/src/tracing/ipc/posix_shared_memory.h
+index 49ab7791..1d5f1667 100644
+--- a/src/tracing/ipc/posix_shared_memory.h
++++ b/src/tracing/ipc/posix_shared_memory.h
+@@ -23,7 +23,8 @@
+     PERFETTO_BUILDFLAG(PERFETTO_OS_ANDROID) || \
+     PERFETTO_BUILDFLAG(PERFETTO_OS_APPLE) ||   \
+     PERFETTO_BUILDFLAG(PERFETTO_OS_FUCHSIA) || \
+-    PERFETTO_BUILDFLAG(PERFETTO_OS_FREEBSD) || \
++    PERFETTO_BUILDFLAG(PERFETTO_OS_FREEBSD) ||   \
++    defined(__HAIKU__) || \
+     PERFETTO_BUILDFLAG(PERFETTO_OS_WASM)
+ 
+ #include <stddef.h>
+diff --git a/src/tracing/platform_posix.cc b/src/tracing/platform_posix.cc
+index c45d9bcd..058f807a 100644
+--- a/src/tracing/platform_posix.cc
++++ b/src/tracing/platform_posix.cc
+@@ -19,7 +19,8 @@
+ #if PERFETTO_BUILDFLAG(PERFETTO_OS_LINUX) ||   \
+     PERFETTO_BUILDFLAG(PERFETTO_OS_ANDROID) || \
+     PERFETTO_BUILDFLAG(PERFETTO_OS_FUCHSIA) || \
+-    PERFETTO_BUILDFLAG(PERFETTO_OS_FREEBSD) || \
++    PERFETTO_BUILDFLAG(PERFETTO_OS_FREEBSD) ||   \
++    defined(__HAIKU__) || \
+     PERFETTO_BUILDFLAG(PERFETTO_OS_APPLE)
+ 
+ #include "perfetto/ext/base/file_utils.h"
+diff --git a/src/tracing/service/tracing_service_impl.cc b/src/tracing/service/tracing_service_impl.cc
+index e9bbd314..1013af5f 100644
+--- a/src/tracing/service/tracing_service_impl.cc
++++ b/src/tracing/service/tracing_service_impl.cc
+@@ -53,7 +53,8 @@
+ 
+ #if PERFETTO_BUILDFLAG(PERFETTO_OS_ANDROID) || \
+     PERFETTO_BUILDFLAG(PERFETTO_OS_LINUX) ||   \
+-    PERFETTO_BUILDFLAG(PERFETTO_OS_FREEBSD) || \
++    PERFETTO_BUILDFLAG(PERFETTO_OS_FREEBSD) ||   \
++    defined(__HAIKU__) || \
+     PERFETTO_BUILDFLAG(PERFETTO_OS_APPLE)
+ #define PERFETTO_HAS_CHMOD
+ #include <sys/stat.h>

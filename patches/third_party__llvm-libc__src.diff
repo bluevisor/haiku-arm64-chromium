@@ -1,0 +1,13 @@
+diff --git a/src/__support/FPUtil/cast.h b/src/__support/FPUtil/cast.h
+index 2a9bfd5..3702da2 100644
+--- a/src/__support/FPUtil/cast.h
++++ b/src/__support/FPUtil/cast.h
+@@ -55,7 +55,7 @@ cast(InType x) {
+         }
+ 
+         InStorageType x_mant = x_bits.get_mantissa();
+-        if (InFPBits::FRACTION_LEN > OutFPBits::FRACTION_LEN)
++        if constexpr (InFPBits::FRACTION_LEN > OutFPBits::FRACTION_LEN)
+           x_mant >>= InFPBits::FRACTION_LEN - OutFPBits::FRACTION_LEN;
+         return OutFPBits::quiet_nan(x_bits.sign(),
+                                     static_cast<OutStorageType>(x_mant))

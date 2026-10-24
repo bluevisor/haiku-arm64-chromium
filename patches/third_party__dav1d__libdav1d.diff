@@ -1,0 +1,35 @@
+diff --git a/src/arm/cpu.c b/src/arm/cpu.c
+index c895049..eca63ac 100644
+--- a/src/arm/cpu.c
++++ b/src/arm/cpu.c
+@@ -32,7 +32,7 @@
+ #include "src/cpu.h"
+ #include "src/arm/cpu.h"
+ 
+-#if HAVE_GETAUXVAL || HAVE_ELF_AUX_INFO
++#if (HAVE_GETAUXVAL || HAVE_ELF_AUX_INFO) && !defined(__HAIKU__)
+ #include <sys/auxv.h>
+ 
+ #if ARCH_AARCH64
+diff --git a/src/cpu.c b/src/cpu.c
+index 6b57fe4..30aa831 100644
+--- a/src/cpu.c
++++ b/src/cpu.c
+@@ -53,7 +53,7 @@
+ #endif
+ #endif
+ 
+-#if HAVE_GETAUXVAL || HAVE_ELF_AUX_INFO
++#if (HAVE_GETAUXVAL || HAVE_ELF_AUX_INFO) && !defined(__HAIKU__)
+ #include <sys/auxv.h>
+ #endif
+ 
+@@ -114,7 +114,7 @@ COLD int dav1d_num_logical_processors(Dav1dContext *const c) {
+ }
+ 
+ COLD unsigned long dav1d_getauxval(unsigned long type) {
+-#if HAVE_GETAUXVAL
++#if HAVE_GETAUXVAL && !defined(__HAIKU__)
+     return getauxval(type);
+ #elif HAVE_ELF_AUX_INFO
+     unsigned long aux = 0;

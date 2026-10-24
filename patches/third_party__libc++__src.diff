@@ -1,0 +1,79 @@
+diff --git a/include/__locale b/include/__locale
+index bb8f8e7..069cf0e 100644
+--- a/include/__locale
++++ b/include/__locale
+@@ -332,7 +332,7 @@ public:
+ #    else
+   static const mask __regex_word = 1 << 10;
+ #    endif // defined(__BIONIC__)
+-#  elif defined(__GLIBC__)
++#  elif defined(__GLIBC__) || defined(__HAIKU__)
+   typedef unsigned short mask;
+   _LIBCPP_DIAGNOSTIC_PUSH
+   _LIBCPP_CLANG_DIAGNOSTIC_IGNORED("-Wmodules-ambiguous-internal-linkage")
+@@ -347,7 +347,8 @@ public:
+   static const mask xdigit = _ISxdigit;
+   static const mask blank  = _ISblank;
+   _LIBCPP_DIAGNOSTIC_POP
+-#    if defined(__mips__) || (BYTE_ORDER == BIG_ENDIAN)
++#    if defined(__mips__) ||                                             \
++        (defined(BYTE_ORDER) && defined(BIG_ENDIAN) && BYTE_ORDER == BIG_ENDIAN)
+   static const mask __regex_word = static_cast<mask>(_ISbit(15));
+ #    else
+   static const mask __regex_word = 0x80;
+diff --git a/include/cctype b/include/cctype
+index f97cfef..cd13997 100644
+--- a/include/cctype
++++ b/include/cctype
+@@ -46,6 +46,25 @@ int toupper(int c);
+ #    endif
+ #  endif
+ 
++#  if defined(__HAIKU__)
++// Haiku's <ctype.h> defines these as function-like macros even in C++,
++// where they must be functions. libstdc++ undefines them here too.
++#    undef isalnum
++#    undef isalpha
++#    undef isblank
++#    undef iscntrl
++#    undef isdigit
++#    undef isgraph
++#    undef islower
++#    undef isprint
++#    undef ispunct
++#    undef isspace
++#    undef isupper
++#    undef isxdigit
++#    undef tolower
++#    undef toupper
++#  endif
++
+ #  if !defined(_LIBCPP_HAS_NO_PRAGMA_SYSTEM_HEADER)
+ #    pragma GCC system_header
+ #  endif
+diff --git a/src/include/config_elast.h b/src/include/config_elast.h
+index daec242..0ee2536 100644
+--- a/src/include/config_elast.h
++++ b/src/include/config_elast.h
+@@ -43,6 +43,8 @@
+ #  define _LIBCPP_ELAST (_sys_nerr - 1)
+ #elif defined(_AIX)
+ #  define _LIBCPP_ELAST 127
++#elif defined(__HAIKU__)
++// No _LIBCPP_ELAST needed on Haiku: strerror handles unknown values.
+ #else
+ // Warn here so that the person doing the libcxx port has an easier time:
+ #  warning ELAST for this platform not yet implemented
+diff --git a/src/locale.cpp b/src/locale.cpp
+index b0a69ab..05a73d7 100644
+--- a/src/locale.cpp
++++ b/src/locale.cpp
+@@ -907,7 +907,7 @@ const ctype<char>::mask* ctype<char>::classic_table() noexcept {
+   return _LIBCPP_GET_C_LOCALE->__ctype_b;
+ #  elif defined(_LIBCPP_MSVCRT) || defined(__MINGW32__)
+   return __pctype_func();
+-#  elif defined(__EMSCRIPTEN__)
++#  elif defined(__EMSCRIPTEN__) || defined(__HAIKU__)
+   return *__ctype_b_loc();
+ #  elif _LIBCPP_LIBC_NEWLIB
+   // Newlib has a 257-entry table in ctype_.c, where (char)0 starts at [1].

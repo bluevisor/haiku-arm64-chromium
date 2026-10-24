@@ -1,0 +1,24 @@
+diff --git a/aom_ports/aarch64_cpudetect.c b/aom_ports/aarch64_cpudetect.c
+index 3b7c2d7..adc0dc5 100644
+--- a/aom_ports/aarch64_cpudetect.c
++++ b/aom_ports/aarch64_cpudetect.c
+@@ -206,7 +206,18 @@ static int arm_get_cpu_caps(void) {
+   return flags;
+ }
+ 
+-#else  // end __Fuchsia__
++#elif defined(__HAIKU__)  // end __Fuchsia__
++
++static int arm_get_cpu_caps(void) {
++  int flags = 0;
++#if HAVE_NEON
++  flags |= HAS_NEON;  // Neon is mandatory in Armv8.0-A.
++#endif  // HAVE_NEON
++  // Haiku exposes neither getauxval nor the ID registers.
++  return flags;
++}
++
++#else  // end __HAIKU__
+ #error \
+     "Runtime CPU detection selected, but no CPU detection method " \
+ "available for your platform. Rerun cmake with -DCONFIG_RUNTIME_CPU_DETECT=0."

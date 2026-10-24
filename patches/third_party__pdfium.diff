@@ -1,0 +1,39 @@
+diff --git a/core/fxge/BUILD.gn b/core/fxge/BUILD.gn
+index c21a5f0..f472f8e 100644
+--- a/core/fxge/BUILD.gn
++++ b/core/fxge/BUILD.gn
+@@ -171,7 +171,7 @@ source_set("fxge") {
+     ]
+   }
+ 
+-  if (is_linux || is_chromeos) {
++  if (is_linux || is_chromeos || is_haiku) {
+     sources += [ "linux/fx_linux_impl.cpp" ]
+   }
+ 
+diff --git a/core/fxge/linux/fx_linux_impl.cpp b/core/fxge/linux/fx_linux_impl.cpp
+index 3cf0a2c..0a9e1cf 100644
+--- a/core/fxge/linux/fx_linux_impl.cpp
++++ b/core/fxge/linux/fx_linux_impl.cpp
+@@ -18,7 +18,8 @@
+ #include "core/fxge/fx_font.h"
+ #include "core/fxge/systemfontinfo_iface.h"
+ 
+-#if !BUILDFLAG(IS_LINUX) && !BUILDFLAG(IS_CHROMEOS) && !defined(OS_ASMJS)
++#if !BUILDFLAG(IS_LINUX) && !BUILDFLAG(IS_CHROMEOS) && !BUILDFLAG(IS_HAIKU) && \
++    !defined(OS_ASMJS)
+ #error "Included on the wrong platform"
+ #endif
+ 
+@@ -174,6 +175,11 @@ class CLinuxPlatform : public CFX_GEModule::PlatformIface {
+       pInfo->AddPath("/usr/share/X11/fonts/Type1");
+       pInfo->AddPath("/usr/share/X11/fonts/TTF");
+       pInfo->AddPath("/usr/local/share/fonts");
++#if BUILDFLAG(IS_HAIKU)
++      pInfo->AddPath("/boot/system/data/fonts");
++      pInfo->AddPath("/boot/system/non-packaged/data/fonts");
++      pInfo->AddPath("/boot/home/config/non-packaged/data/fonts");
++#endif
+     }
+     return pInfo;
+   }

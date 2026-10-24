@@ -1,0 +1,25 @@
+diff --git a/vpx_ports/aarch64_cpudetect.c b/vpx_ports/aarch64_cpudetect.c
+index df8e1e2..f85d85c 100644
+--- a/vpx_ports/aarch64_cpudetect.c
++++ b/vpx_ports/aarch64_cpudetect.c
+@@ -207,7 +207,19 @@ static int arm_get_cpu_caps(void) {
+   return flags;
+ }
+ 
+-#else  // end __Fuchsia__
++#elif defined(__HAIKU__)  // end __Fuchsia__
++
++static int arm_get_cpu_caps(void) {
++  int flags = 0;
++#if HAVE_NEON
++  flags |= HAS_NEON;  // Neon is mandatory in Armv8.0-A.
++#endif  // HAVE_NEON
++  // Haiku exposes neither getauxval nor the ID registers, so the
++  // optional extensions cannot be probed and stay disabled.
++  return flags;
++}
++
++#else  // end __HAIKU__
+ #error \
+     "Runtime CPU detection selected, but no CPU detection method available" \
+ "for your platform. Rerun configure with --disable-runtime-cpu-detect."

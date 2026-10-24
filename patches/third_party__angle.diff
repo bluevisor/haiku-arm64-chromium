@@ -1,0 +1,76 @@
+diff --git a/gni/angle.gni b/gni/angle.gni
+index bde26da..b99ad7a 100644
+--- a/gni/angle.gni
++++ b/gni/angle.gni
+@@ -187,6 +187,9 @@ declare_args() {
+ 
+   # Vulkan loader is statically linked on Mac unless the embedder specifies
+   # otherwise. http://anglebug.com/40096682
++  # On Haiku this loads SwiftShader through volk: lib/libvulkan.so.1 is
++  # SwiftShader's libvk_swiftshader.so, and with angle_use_custom_libvulkan
++  # off no Vulkan loader (which has no Haiku port) is built.
+   angle_shared_libvulkan = !is_mac || angle_shared_libvulkan_on_mac
+ 
+   # There's no "is_winuwp" helper in BUILDCONFIG.gn, so we define one ourselves
+@@ -230,7 +233,14 @@ declare_args() {
+   angle_enable_gl =
+       (ozone_platform_drm || ozone_platform_wayland || !is_linux ||
+        ((angle_use_x11 && !is_chromeos) || angle_use_wayland || is_castos)) &&
+-      !is_fuchsia && !angle_is_winuwp && !is_win_arm64 && !is_ios
++      !is_fuchsia && !angle_is_winuwp && !is_win_arm64 && !is_ios &&
++      # The "!is_linux" clause above means any non-Linux platform falls
++      # through to enabled by default, and Haiku has no GL driver: my Ozone
++      # backend already reports GetAllowedGLImplementations() as empty, so
++      # ANGLE's GL backend is dead code here, and libANGLE/Display.cpp's own
++      # #error "Unsupported OpenGL platform." fires once ANGLE_ENABLE_OPENGL
++      # gets defined for a platform its renderer/gl/ backend has no case for.
++      !is_haiku
+ 
+   angle_enable_vulkan =
+       angle_has_build &&
+diff --git a/src/common/vulkan/BUILD.gn b/src/common/vulkan/BUILD.gn
+index aaf4379..6f45975 100644
+--- a/src/common/vulkan/BUILD.gn
++++ b/src/common/vulkan/BUILD.gn
+@@ -123,7 +123,7 @@ if (angle_enable_vulkan) {
+       if (!angle_use_vulkan_null_display) {
+         public_deps += [ "//third_party/fuchsia-sdk/sdk/pkg/vulkan_layers:VkLayer_image_pipe_swapchain" ]
+       }
+-    } else if (!is_android) {
++    } else if (!is_android && !is_haiku) {
+       if (angle_shared_libvulkan) {
+         data_deps = [ "$angle_vulkan_loader_dir:libvulkan" ]
+       } else {
+diff --git a/src/libANGLE/renderer/wgpu/DisplayWgpu.cpp b/src/libANGLE/renderer/wgpu/DisplayWgpu.cpp
+index c6d6c2a..aea0c61 100644
+--- a/src/libANGLE/renderer/wgpu/DisplayWgpu.cpp
++++ b/src/libANGLE/renderer/wgpu/DisplayWgpu.cpp
+@@ -29,7 +29,9 @@
+ // unavailable (e.g. the ChromeOS wgpu build) CreateWgpuWindowSurface is stubbed out below and no
+ // EGL_WINDOW_BIT config is advertised. Unlike the rest of the backend, X11 vs Wayland is chosen at
+ // runtime (see DisplayWgpu::initialize) because a single Linux build commonly enables both.
+-#if defined(ANGLE_PLATFORM_LINUX) && !defined(ANGLE_USE_X11) && !defined(ANGLE_USE_WAYLAND)
++#if (defined(ANGLE_PLATFORM_LINUX) && !defined(ANGLE_USE_X11) && \
++     !defined(ANGLE_USE_WAYLAND)) ||                              \
++    defined(__HAIKU__)
+ #    define ANGLE_WEBGPU_HAS_WINDOW_SURFACE_TYPE 0
+ #else
+ #    define ANGLE_WEBGPU_HAS_WINDOW_SURFACE_TYPE 1
+diff --git a/src/libGLESv2.gni b/src/libGLESv2.gni
+index edd1e0b..31687fa 100644
+--- a/src/libGLESv2.gni
++++ b/src/libGLESv2.gni
+@@ -126,6 +126,13 @@ if (is_linux || is_chromeos || is_android || is_fuchsia) {
+   ]
+ }
+ 
++if (is_haiku) {
++  libangle_common_sources += [
++    "src/common/system_utils_haiku.cpp",
++    "src/common/system_utils_posix.cpp",
++  ]
++}
++
+ if (is_linux || is_chromeos) {
+   libangle_common_sources += [
+     "src/common/linux/window_system.cpp",

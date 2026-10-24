@@ -1,0 +1,190 @@
+diff --git a/src/Reactor/BUILD.gn b/src/Reactor/BUILD.gn
+index 67dfeb0..6b03cae 100644
+--- a/src/Reactor/BUILD.gn
++++ b/src/Reactor/BUILD.gn
+@@ -327,7 +327,7 @@ if (supports_llvm) {
+       "$llvm_dir/configs/common/include/",
+     ]
+ 
+-    if (is_linux || is_chromeos) {
++    if (is_linux || is_chromeos || is_haiku) {
+       include_dirs += [ "$llvm_dir/configs/linux/include/" ]
+     } else if (is_fuchsia) {
+       include_dirs += [ "$llvm_dir/configs/fuchsia/include/" ]
+diff --git a/src/Reactor/Debug.cpp b/src/Reactor/Debug.cpp
+index cdb1afc..76e1b01 100644
+--- a/src/Reactor/Debug.cpp
++++ b/src/Reactor/Debug.cpp
+@@ -23,7 +23,7 @@
+ #	include <android/log.h>
+ #endif
+ 
+-#if defined(__unix__)
++#if defined(__unix__) && !defined(__HAIKU__)
+ #	define PTRACE
+ #	include <sys/ptrace.h>
+ #	include <sys/types.h>
+diff --git a/src/Reactor/ExecutableMemory.cpp b/src/Reactor/ExecutableMemory.cpp
+index db5145b..c603aab 100644
+--- a/src/Reactor/ExecutableMemory.cpp
++++ b/src/Reactor/ExecutableMemory.cpp
+@@ -352,6 +352,17 @@ void *allocateMemoryPages(size_t bytes, int permissions, bool need_exec)
+ 		mapping = mmap(nullptr, length, prot, flags, -1, 0);
+ 	}
+ 
++	if(mapping == MAP_FAILED)
++	{
++		mapping = nullptr;
++	}
++#elif defined(__HAIKU__)
++	// Not from the heap as on other POSIX systems: libroot's page allocator
++	// faults writing a free-chunk header into heap pages that were
++	// mprotect'ed for JIT code and later freed.
++	mapping = mmap(nullptr, length, permissionsToMmapProt(permissions),
++	               MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
++
+ 	if(mapping == MAP_FAILED)
+ 	{
+ 		mapping = nullptr;
+@@ -400,7 +411,7 @@ void deallocateMemoryPages(void *memory, size_t bytes)
+ 	ASSERT(result);
+ 	result = VirtualFree(memory, 0, MEM_RELEASE);
+ 	ASSERT(result);
+-#elif defined(__APPLE__) || (defined(__linux__) && defined(REACTOR_ANONYMOUS_MMAP_NAME))
++#elif defined(__APPLE__) || defined(__HAIKU__) || (defined(__linux__) && defined(REACTOR_ANONYMOUS_MMAP_NAME))
+ 	size_t pageSize = memoryPageSize();
+ 	size_t length = (bytes + pageSize - 1) & ~(pageSize - 1);
+ 	int result = munmap(memory, length);
+diff --git a/src/Reactor/reactor.gni b/src/Reactor/reactor.gni
+index 51cb8fb..b187f9f 100644
+--- a/src/Reactor/reactor.gni
++++ b/src/Reactor/reactor.gni
+@@ -14,7 +14,9 @@ declare_args() {
+ }
+ 
+ declare_args() {
+-  supports_llvm = is_linux || is_chromeos || is_fuchsia || is_win || is_android
++  supports_llvm =
++      is_linux || is_chromeos || is_fuchsia || is_win || is_android ||
++      is_haiku
+     # LLVM uses C++17 features which require macOS 10.12, while Chrome's minimum platform for x86 is 10.11.
+     # Don't build LLVM on Mac, unless we have to. This only happens on ARM64 devices, which launched with 11.0.
+     # TODO(b/174843857): Remove check for !supports_subzero once Chrome supports macOS 10.12
+diff --git a/src/System/Debug.cpp b/src/System/Debug.cpp
+index 2b5eb63..93eaf7a 100644
+--- a/src/System/Debug.cpp
++++ b/src/System/Debug.cpp
+@@ -18,7 +18,7 @@
+ #	include <android/log.h>
+ #endif
+ 
+-#if defined(__unix__)
++#if defined(__unix__) && !defined(__HAIKU__)
+ #	define PTRACE
+ #	include <sys/ptrace.h>
+ #	include <sys/types.h>
+diff --git a/src/Vulkan/BUILD.gn b/src/Vulkan/BUILD.gn
+index 852068c..f5db948 100644
+--- a/src/Vulkan/BUILD.gn
++++ b/src/Vulkan/BUILD.gn
+@@ -28,7 +28,7 @@ config("swiftshader_libvulkan_private_config") {
+     if (ozone_platform_wayland) {
+       defines += [ "VK_USE_PLATFORM_WAYLAND_KHR" ]
+     }
+-  } else if (is_chromeos) {
++  } else if (is_chromeos || is_haiku) {
+     defines = [ "VK_EXPORT=__attribute__((visibility(\"default\")))" ]
+   } else if (is_fuchsia) {
+     defines = [
+@@ -217,7 +217,7 @@ swiftshader_shared_library("swiftshader_libvulkan") {
+       "-Wl,-exported_symbols_list," +
+           rebase_path("vk_swiftshader.exports", root_build_dir),
+     ]
+-  } else if (is_linux || is_chromeos || is_fuchsia) {
++  } else if (is_linux || is_chromeos || is_fuchsia || is_haiku) {
+     inputs = [ "vk_swiftshader.lds" ]
+     ldflags = [
+       # -Bsymbolic binds symbol references to their global definitions within
+diff --git a/third_party/llvm-10.0/BUILD.gn b/third_party/llvm-10.0/BUILD.gn
+index f99abba..54a31ea 100644
+--- a/third_party/llvm-10.0/BUILD.gn
++++ b/third_party/llvm-10.0/BUILD.gn
+@@ -103,7 +103,7 @@ llvm_include_dirs = [
+   "configs/common/lib/Transforms/InstCombine/",
+ ]
+ 
+-if (is_linux || is_chromeos) {
++if (is_linux || is_chromeos || is_haiku) {
+   llvm_include_dirs += [ "configs/linux/include/" ]
+ } else if (is_fuchsia) {
+   llvm_include_dirs += [ "configs/fuchsia/include/" ]
+diff --git a/third_party/llvm-10.0/llvm/lib/Support/Unix/Path.inc b/third_party/llvm-10.0/llvm/lib/Support/Unix/Path.inc
+index 2a03dc6..132e1b5 100644
+--- a/third_party/llvm-10.0/llvm/lib/Support/Unix/Path.inc
++++ b/third_party/llvm-10.0/llvm/lib/Support/Unix/Path.inc
+@@ -17,6 +17,11 @@
+ 
+ #include "Unix.h"
+ #include <limits.h>
++
++#if defined(__HAIKU__)
++#include <OS.h>
++#include <image.h>
++#endif
+ #include <stdio.h>
+ #if HAVE_SYS_STAT_H
+ #include <sys/stat.h>
+@@ -283,6 +288,13 @@ std::string getMainExecutable(const char *argv0, void *MainAddr) {
+   char link_path[MAXPATHLEN];
+   if (realpath(DLInfo.dli_fname, link_path))
+     return link_path;
++#elif defined(__HAIKU__)
++  image_info info;
++  int32 cookie = 0;
++  while (get_next_image_info(B_CURRENT_TEAM, &cookie, &info) == B_OK) {
++    if (info.type == B_APP_IMAGE)
++      return info.name;
++  }
+ #else
+ #error GetMainExecutable is not implemented on this host yet.
+ #endif
+diff --git a/third_party/llvm-10.0/llvm/lib/Support/Unix/Process.inc b/third_party/llvm-10.0/llvm/lib/Support/Unix/Process.inc
+index 1159a13..a7e2552 100644
+--- a/third_party/llvm-10.0/llvm/lib/Support/Unix/Process.inc
++++ b/third_party/llvm-10.0/llvm/lib/Support/Unix/Process.inc
+@@ -87,7 +87,7 @@ size_t Process::GetMallocUsage() {
+   struct mallinfo2 mi;
+   mi = ::mallinfo2();
+   return mi.uordblks;
+-#elif defined(HAVE_MALLINFO)
++#elif defined(HAVE_MALLINFO) && !defined(__HAIKU__)
+   struct mallinfo mi;
+   mi = ::mallinfo();
+   return mi.uordblks;
+diff --git a/third_party/llvm-10.0/llvm/lib/Support/raw_ostream.cpp b/third_party/llvm-10.0/llvm/lib/Support/raw_ostream.cpp
+index 13b0203..6e99c72 100644
+--- a/third_party/llvm-10.0/llvm/lib/Support/raw_ostream.cpp
++++ b/third_party/llvm-10.0/llvm/lib/Support/raw_ostream.cpp
+@@ -754,7 +754,7 @@ uint64_t raw_fd_ostream::seek(uint64_t off) {
+   flush();
+ #ifdef _WIN32
+   pos = ::_lseeki64(FD, off, SEEK_SET);
+-#elif defined(HAVE_LSEEK64)
++#elif defined(HAVE_LSEEK64) && !defined(__HAIKU__)
+   pos = ::lseek64(FD, off, SEEK_SET);
+ #else
+   pos = ::lseek(FD, off, SEEK_SET);
+diff --git a/third_party/marl/src/memory.cpp b/third_party/marl/src/memory.cpp
+index f52be55..811ee56 100644
+--- a/third_party/marl/src/memory.cpp
++++ b/third_party/marl/src/memory.cpp
+@@ -19,7 +19,8 @@
+ 
+ #include <cstring>
+ 
+-#if defined(__linux__) || defined(__FreeBSD__) || defined(__APPLE__) || defined(__EMSCRIPTEN__)
++#if defined(__linux__) || defined(__FreeBSD__) || defined(__APPLE__) || \
++    defined(__EMSCRIPTEN__) || defined(__HAIKU__)
+ #include <sys/mman.h>
+ #include <unistd.h>
+ namespace {

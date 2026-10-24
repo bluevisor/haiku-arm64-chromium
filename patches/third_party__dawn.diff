@@ -1,0 +1,106 @@
+diff --git a/scripts/dawn_features.gni b/scripts/dawn_features.gni
+index b4437502c..4f12a5347 100644
+--- a/scripts/dawn_features.gni
++++ b/scripts/dawn_features.gni
+@@ -59,7 +59,11 @@ if (build_with_chromium) {
+ dawn_is_winuwp = is_win && target_os == "winuwp"
+ dawn_use_windows_ui = is_win
+ 
+-if (is_android || is_ios) {
++if (is_android || is_ios || is_haiku) {
++  # Haiku has no Vulkan driver and no SwiftShader Vulkan build here, and this
++  # default is what pulls in Dawn's whole Vulkan backend (BackendVk.cpp and
++  # friends) even with Chromium's own enable_vulkan already off for Haiku --
++  # dawn_enable_vulkan below ORs in dawn_use_swiftshader unconditionally.
+   dawn_use_swiftshader = false
+ } else {
+   declare_args() {
+diff --git a/src/dawn/common/BUILD.gn b/src/dawn/common/BUILD.gn
+index b940fb13a..ca34197c3 100644
+--- a/src/dawn/common/BUILD.gn
++++ b/src/dawn/common/BUILD.gn
+@@ -153,7 +153,7 @@ dawn_generator("dawn_gpu_info_gen") {
+ # all of Chromium's OSes so we explicitly make the target visible only on
+ # systems we know Dawn is able to compile on.
+ if (is_win || is_linux || is_chromeos || is_mac || is_fuchsia || is_android ||
+-    is_ios || is_wasm) {
++    is_ios || is_wasm || is_haiku) {
+   static_library("common") {
+     sources = [
+       "Algebra.h",
+diff --git a/src/dawn/common/SystemUtils.cpp b/src/dawn/common/SystemUtils.cpp
+index 8f90fd328..04901bd01 100644
+--- a/src/dawn/common/SystemUtils.cpp
++++ b/src/dawn/common/SystemUtils.cpp
+@@ -27,6 +27,11 @@
+ 
+ #include "src/dawn/common/SystemUtils.h"
+ 
++#if defined(__HAIKU__)
++#include <OS.h>
++#include <image.h>
++#endif
++
+ #include "src/utils/assert.h"
+ #include "src/utils/compiler.h"
+ #include "src/utils/log.h"
+@@ -36,7 +41,7 @@
+ #include "src/utils/windows_with_undefs.h"
+ 
+ #include <vector>
+-#elif DAWN_PLATFORM_IS(LINUX)
++#elif DAWN_PLATFORM_IS(LINUX) || DAWN_PLATFORM_IS(HAIKU)
+ #include <dlfcn.h>
+ #include <limits.h>
+ #include <unistd.h>
+@@ -144,6 +149,17 @@ std::optional<std::string> GetExecutablePath() {
+     buffer[size] = '\0';
+     return buffer.data();
+ }
++#elif DAWN_PLATFORM_IS(HAIKU)
++std::optional<std::string> GetExecutablePath() {
++    image_info info;
++    int32 cookie = 0;
++    while (get_next_image_info(B_CURRENT_TEAM, &cookie, &info) == B_OK) {
++        if (info.type == B_APP_IMAGE) {
++            return info.name;
++        }
++    }
++    return {};
++}
+ #elif DAWN_PLATFORM_IS(FUCHSIA)
+ std::optional<std::string> GetExecutablePath() {
+     // UNIMPLEMENTED
+@@ -169,7 +185,8 @@ std::optional<std::string> GetExecutableDirectory() {
+     return exePath->substr(0, lastPathSepLoc + 1);
+ }
+ 
+-#if DAWN_PLATFORM_IS(LINUX) || DAWN_PLATFORM_IS(MACOS) || DAWN_PLATFORM_IS(IOS)
++#if DAWN_PLATFORM_IS(LINUX) || DAWN_PLATFORM_IS(MACOS) || \
++    DAWN_PLATFORM_IS(IOS) || DAWN_PLATFORM_IS(HAIKU)
+ std::optional<std::string> GetModulePath() {
+     static int placeholderSymbol = 0;
+     Dl_info dlInfo;
+diff --git a/src/utils/platform.h b/src/utils/platform.h
+index 4dd58a487..a754f7508 100644
+--- a/src/utils/platform.h
++++ b/src/utils/platform.h
+@@ -40,6 +40,7 @@
+ //    - WIN32
+ //    - WINUWP
+ //  - POSIX
++//      - HAIKU
+ //    - LINUX
+ //      - ANDROID
+ //      - CHROMEOS
+@@ -86,6 +87,10 @@
+ #error "Unsupported Apple platform."
+ #endif
+ 
++#elif defined(__HAIKU__)
++#define DAWN_PLATFORM_IS_HAIKU 1
++#define DAWN_PLATFORM_IS_POSIX 1
++
+ #elif defined(__Fuchsia__)
+ #define DAWN_PLATFORM_IS_FUCHSIA 1
+ #define DAWN_PLATFORM_IS_POSIX 1

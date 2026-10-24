@@ -1,0 +1,162 @@
+diff --git a/rtc_base/network.cc b/rtc_base/network.cc
+index 9567199..3994250 100644
+--- a/rtc_base/network.cc
++++ b/rtc_base/network.cc
+@@ -667,7 +667,12 @@ void BasicNetworkManager::ConvertIfAddrs(
+       continue;
+     }
+     // Skip ones which are down.
++#if defined(__HAIKU__)
++    // Haiku has no IFF_RUNNING; IFF_LINK carries the same sense.
++    if (!(cursor->ifa_flags & IFF_LINK)) {
++#else
+     if (!(cursor->ifa_flags & IFF_RUNNING)) {
++#endif
+       RTC_LOG(LS_INFO) << "Skip interface because of not IFF_RUNNING: "
+                        << ip.ToSensitiveString();
+       continue;
+diff --git a/rtc_base/physical_socket_server.cc b/rtc_base/physical_socket_server.cc
+index 9d9927e..3aa4a42 100644
+--- a/rtc_base/physical_socket_server.cc
++++ b/rtc_base/physical_socket_server.cc
+@@ -53,6 +53,18 @@
+ #endif
+ #include <sys/select.h>
+ #include <unistd.h>
++
++#if defined(__HAIKU__)
++// RFC 3542 sections 6.5 and 6.4. Haiku's own IPv6 options stop at 37,
++// so these numbers are free; setsockopt answers ENOPROTOOPT, which the
++// callers already handle.
++#if !defined(IPV6_TCLASS)
++#define IPV6_TCLASS 67
++#endif
++#if !defined(IPV6_RECVTCLASS)
++#define IPV6_RECVTCLASS 66
++#endif
++#endif  // defined(__HAIKU__)
+ #endif
+ 
+ #if defined(WEBRTC_WIN)
+@@ -607,6 +619,9 @@ int PhysicalSocket::DoReadFromSocket(void* buffer,
+       }
+       if (cmsg->cmsg_level != SOL_SOCKET)
+         continue;
++#if !defined(__HAIKU__)
++      // Haiku attaches no SCM_TIMESTAMP control message, so drop the
++      // whole branch rather than leave an unreachable body behind.
+       if (timestamp && cmsg->cmsg_type == SCM_TIMESTAMP) {
+         timeval ts;
+         std::memcpy(static_cast<void*>(&ts), CMSG_DATA(cmsg), sizeof(ts));
+@@ -614,6 +629,7 @@ int PhysicalSocket::DoReadFromSocket(void* buffer,
+             (Timestamp::Seconds(ts.tv_sec) + TimeDelta::Micros(ts.tv_usec))
+                 .us();
+       }
++#endif  // !defined(__HAIKU__)
+     }
+   }
+   if (out_addr) {
+@@ -759,6 +775,9 @@ int PhysicalSocket::TranslateOption(Option opt, int* slevel, int* sopt) {
+ #elif defined(WEBRTC_MAC) || defined(BSD)
+       RTC_LOG(LS_WARNING) << "Socket::OPT_DONTFRAGMENT not supported.";
+       return -1;
++#elif defined(__HAIKU__)
++      RTC_LOG(LS_WARNING) << "Socket::OPT_DONTFRAGMENT not supported.";
++      return -1;
+ #elif defined(WEBRTC_POSIX)
+       *slevel = IPPROTO_IP;
+       *sopt = IP_MTU_DISCOVER;
+@@ -810,8 +829,14 @@ int PhysicalSocket::TranslateOption(Option opt, int* slevel, int* sopt) {
+         *slevel = IPPROTO_IPV6;
+         *sopt = IPV6_RECVTCLASS;
+       } else {
++#if defined(__HAIKU__)
++        // No IP_RECVTOS on Haiku, and no number that means it.
++        RTC_LOG(LS_WARNING) << "Socket::OPT_RECV_ECN not supported.";
++        return -1;
++#else
+         *slevel = IPPROTO_IP;
+         *sopt = IP_RECVTOS;
++#endif
+       }
+       break;
+ #else
+@@ -825,21 +850,31 @@ int PhysicalSocket::TranslateOption(Option opt, int* slevel, int* sopt) {
+       *sopt = SO_KEEPALIVE;
+       break;
+     case OPT_TCP_KEEPCNT:
+-      *slevel = IPPROTO_TCP;
+-      *sopt = TCP_KEEPCNT;
+-      break;
+     case OPT_TCP_KEEPIDLE:
++    case OPT_TCP_KEEPINTVL:
++#if defined(__HAIKU__)
++      // Haiku exposes no keepalive tuning knobs.
++      RTC_LOG(LS_WARNING) << "Socket::OPT_TCP_KEEP* not supported.";
++      return -1;
++#else
+       *slevel = IPPROTO_TCP;
++      switch (opt) {
++        case OPT_TCP_KEEPCNT:
++          *sopt = TCP_KEEPCNT;
++          break;
++        case OPT_TCP_KEEPIDLE:
+ #if !defined(WEBRTC_MAC)
+-      *sopt = TCP_KEEPIDLE;
++          *sopt = TCP_KEEPIDLE;
+ #else
+-      *sopt = TCP_KEEPALIVE;
++          *sopt = TCP_KEEPALIVE;
+ #endif
++          break;
++        default:
++          *sopt = TCP_KEEPINTVL;
++          break;
++      }
+       break;
+-    case OPT_TCP_KEEPINTVL:
+-      *slevel = IPPROTO_TCP;
+-      *sopt = TCP_KEEPINTVL;
+-      break;
++#endif
+     case OPT_TCP_USER_TIMEOUT:
+ #if defined(WEBRTC_LINUX) || defined(WEBRTC_ANDROID)
+       *slevel = IPPROTO_TCP;
+@@ -890,11 +925,13 @@ bool SocketDispatcher::Initialize() {
+   ioctlsocket(s_, FIONBIO, &argp);
+ #elif defined(WEBRTC_POSIX)
+   fcntl(s_, F_SETFL, fcntl(s_, F_GETFL, 0) | O_NONBLOCK);
++#if !defined(__HAIKU__)
+   int value = 1;
+   // Attempt to get receive packet timestamp from the socket.
+   if (::setsockopt(s_, SOL_SOCKET, SO_TIMESTAMP, &value, sizeof(value)) != 0) {
+     RTC_DLOG(LS_ERROR) << "::setsockopt failed. errno: " << LAST_SYSTEM_ERROR;
+   }
++#endif  // !defined(__HAIKU__)
+ #endif
+ 
+ #if defined(WEBRTC_IOS)
+diff --git a/rtc_base/platform_thread_types.cc b/rtc_base/platform_thread_types.cc
+index 20bf4af..a81f066 100644
+--- a/rtc_base/platform_thread_types.cc
++++ b/rtc_base/platform_thread_types.cc
+@@ -31,6 +31,10 @@ typedef HRESULT(WINAPI* RTC_SetThreadDescription)(HANDLE hThread,
+                                                   PCWSTR lpThreadDescription);
+ #endif
+ 
++#if defined(__HAIKU__)
++#include <OS.h>  // for find_thread
++#endif
++
+ #if defined(WEBRTC_FUCHSIA)
+ #include <zircon/syscalls.h>
+ 
+@@ -52,6 +56,8 @@ PlatformThreadId CurrentThreadId() {
+   return zx_thread_self();
+ #elif defined(WEBRTC_LINUX)
+   return syscall(__NR_gettid);
++#elif defined(__HAIKU__)
++  return find_thread(nullptr);
+ #elif defined(__EMSCRIPTEN__)
+   return static_cast<PlatformThreadId>(pthread_self());
+ #else
