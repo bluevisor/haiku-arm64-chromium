@@ -298,6 +298,18 @@ Keep the tar in its own ssh command. `ssh haiku 'tar -xf - && nohup … &'`
 backgrounds the whole `&&` list, so tar reads `/dev/null` and fails with
 "This does not look like a tar archive".
 
+## 8a. Identity
+
+The browser presents itself as desktop Linux: `Mozilla/5.0 (X11; Linux
+aarch64) ...`, `navigator.platform` "Linux aarch64", `Sec-CH-UA-Platform`
+"Linux" (`components/embedder_support/user_agent_utils.cc`, blink's
+`navigator_id.cc` and `navigator_base.cc`). Bot checks and sign-in flows keep
+allowlists of OS tokens and an honest "Haiku" fails all of them; Google's
+sign-in page now loads where content_shell was refused outright. The WebGL
+renderer string still names Venus and the Apple GPU. The launcher also
+exports `TZ` (the arm64 image has no zone data, and "Etc/Unknown" is a
+fingerprint of its own).
+
 ## 8b. Sound
 
 See `gpu/README.md`, Phase 5: an `intel-hda` device in the VM, Haiku's `hda`

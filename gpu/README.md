@@ -223,8 +223,17 @@ Aquarium runs 500 fish at 25 fps in the 1024x1024 canvas with no GPU errors
 With MoltenVK (no KosmicKrisp patch needed) the same path gives WebGL 1 only.
 
 The launcher (`vm/HaikuChrome`) now runs ANGLE on Venus by default, with
-SwiftShader kept as a fallback (`HAIKUCHROME_SWIFTSHADER=1`). Still to do:
-get the KosmicKrisp fix upstream so stock UTM works.
+SwiftShader kept as a fallback (`HAIKUCHROME_SWIFTSHADER=1`).
+
+Upstreaming: the fix is a commit on the `kk-host-pointer-images` branch of
+the local `osy/mesa` clone (`~/Developer/mesa-kk`), exported as
+`0001-kk-back-optimal-images-on-host-pointer-memory.patch` here, ready for a
+Mesa merge request (`git am` it on top of `main`; the diff applies to
+upstream `src/kosmickrisp` unchanged). The UTM side is
+[utmapp/UTM#8011](https://github.com/utmapp/UTM/issues/8011), which
+explains the vkr/KosmicKrisp mismatch and points at the patch. Until one of
+them lands, stock UTM + KosmicKrisp has no working images; MoltenVK gives
+WebGL 1 only.
 
 ## Phase 4: GPU compositing
 
@@ -254,9 +263,15 @@ they go to the BWindow the way the software compositor's bitmaps did.
 
 Measured: WebGL Aquarium 500 fish at 22 fps with the whole 1800x1090 window
 read back per frame (25 fps when only the canvas was read back under software
-compositing), no GPU errors. The readback is one `glReadPixels` through
-Venus plus one `memcpy` into the BBitmap per frame; a mapped-blob readback
-or a damage-rect `PostSubBuffer` would cut it.
+compositing), no GPU errors.
+
+Partial updates: the surface reports `SupportsPostSubBuffer()`, so viz hands
+it the frame's damage rect and `PostSubBuffer()` reads back only those rows
+(`glReadPixels` of the rect) into the window's persistent front buffer,
+through the shim's `LockFrontBuffer()`/`UnlockFrontBuffer()` (a B_RGBA32
+bitmap the view keeps and repaints from). Full swaps go through the same
+buffer, so no per-frame BBitmap allocation remains. A page with a blinking
+caret now costs a few rows per frame instead of 8 MB.
 
 ## Phase 5: sound
 

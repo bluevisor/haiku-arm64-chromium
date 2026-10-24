@@ -8799,36 +8799,53 @@ index 4aac4f0b53..dfeb45379f 100644
  
      deps += [
 diff --git a/components/embedder_support/user_agent_utils.cc b/components/embedder_support/user_agent_utils.cc
-index 3f87ec84fb..2ae912e440 100644
+index 3f87ec84fb..3536044a0c 100644
 --- a/components/embedder_support/user_agent_utils.cc
 +++ b/components/embedder_support/user_agent_utils.cc
-@@ -293,6 +293,11 @@ std::string GetUserAgentPlatform() {
+@@ -293,6 +293,13 @@ std::string GetUserAgentPlatform() {
    return ui::GetDeviceFormFactor() == ui::DEVICE_FORM_FACTOR_TABLET
               ? "iPad; "
               : "iPhone; ";
 +#elif BUILDFLAG(IS_HAIKU)
-+  // Haiku is not an X11 system, so it contributes no windowing prefix here.
-+  // BuildOSCpuInfoFromOSVersionAndCpuType()'s generic POSIX branch then
-+  // fills in uname()'s sysname and machine, giving "Haiku arm64".
-+  return "";
++  // Present as desktop Linux. Cloudflare's Turnstile, Google sign-in and the
++  // like have an allowlist of OS tokens, and an honest "Haiku" fails every
++  // check (the WebGL renderer string, timezone and fonts still tell the
++  // truth). GetUnifiedPlatform(), GetPlatformForUAMetadata() and
++  // BuildOSCpuInfoFromOSVersionAndCpuType() complete the disguise.
++  return "X11; ";
  #else
  #error Unsupported platform
  #endif
-@@ -330,6 +335,14 @@ std::string GetUnifiedPlatform() {
+@@ -330,6 +337,8 @@ std::string GetUnifiedPlatform() {
      return "iPad; CPU iPad OS 14_0 like Mac OS X";
    }
    return "iPhone; CPU iPhone OS 14_0 like Mac OS X";
 +#elif BUILDFLAG(IS_HAIKU)
-+  // Haiku names itself here, as Fuchsia does above, rather than adopting
-+  // another system's reduced token. This is the reduced (anti-fingerprinting)
-+  // platform string, so it stays a fixed value carrying no version or CPU
-+  // detail -- it just says Haiku instead of claiming to be Linux. Keep this
-+  // consistent with GetUserAgentPlatform() above and with
-+  // GetReducedNavigatorPlatform() in blink's navigator_base.cc.
-+  return "Haiku";
++  return "X11; Linux aarch64";
  #else
  #error Unsupported platform
  #endif
+@@ -640,6 +649,9 @@ std::string GetPlatformForUAMetadata() {
+ #else
+   return "Chromium OS";
+ #endif
++#elif BUILDFLAG(IS_HAIKU)
++  // Sec-CH-UA-Platform: the same Linux disguise as the User-Agent header.
++  return "Linux";
+ #else
+   return std::string(version_info::GetOSType());
+ #endif
+@@ -795,6 +807,10 @@ std::string GetCpuBitness() {
+ std::string BuildOSCpuInfoFromOSVersionAndCpuType(const std::string& os_version,
+                                                   const std::string& cpu_type) {
+   std::string os_cpu;
++#if BUILDFLAG(IS_HAIKU)
++  // Linux's uname machine name for arm64; see GetOSType().
++  return "Linux aarch64";
++#endif
+ 
+ #if !BUILDFLAG(IS_ANDROID) && BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_APPLE)
+   // Should work on any Posix system.
 diff --git a/components/enterprise/BUILD.gn b/components/enterprise/BUILD.gn
 index 78407912eb..c5ea44b7ff 100644
 --- a/components/enterprise/BUILD.gn
@@ -11918,10 +11935,10 @@ index 1f380bcc60..88c7dfb38b 100644
  
  pid_t GetTID() {
 diff --git a/third_party/blink/renderer/core/execution_context/navigator_base.cc b/third_party/blink/renderer/core/execution_context/navigator_base.cc
-index cccfafe8f9..50d159d82c 100644
+index cccfafe8f9..a6af920494 100644
 --- a/third_party/blink/renderer/core/execution_context/navigator_base.cc
 +++ b/third_party/blink/renderer/core/execution_context/navigator_base.cc
-@@ -36,6 +36,15 @@ String GetReducedNavigatorPlatform() {
+@@ -36,6 +36,16 @@ String GetReducedNavigatorPlatform() {
    return "Linux x86_64";
  #elif BUILDFLAG(IS_IOS)
    return "iPhone";
@@ -11933,10 +11950,25 @@ index cccfafe8f9..50d159d82c 100644
 +  // identifiable, but it does not misrepresent the system. Keep this
 +  // consistent with GetUserAgentPlatform() and GetUnifiedPlatform() in
 +  // components/embedder_support/user_agent_utils.cc.
-+  return "Haiku";
++  // Reduced navigator.platform: the Linux disguise, see user_agent_utils.cc.
++  return "Linux aarch64";
  #else
  #error Unsupported platform
  #endif
+diff --git a/third_party/blink/renderer/core/frame/navigator_id.cc b/third_party/blink/renderer/core/frame/navigator_id.cc
+index 22243ebf5e..c03473a49a 100644
+--- a/third_party/blink/renderer/core/frame/navigator_id.cc
++++ b/third_party/blink/renderer/core/frame/navigator_id.cc
+@@ -65,6 +65,9 @@ String NavigatorID::platform() const {
+ #elif BUILDFLAG(IS_WIN)
+   // Match Safari and Mozilla on Windows.
+   return "Win32";
++#elif BUILDFLAG(IS_HAIKU)
++  // Matches the User-Agent's Linux disguise (user_agent_utils.cc).
++  return "Linux aarch64";
+ #else  // Unix-like systems
+   struct utsname osname;
+   DEFINE_THREAD_SAFE_STATIC_LOCAL(ThreadSpecific<String>, platform_name, ());
 diff --git a/third_party/blink/renderer/core/layout/build.gni b/third_party/blink/renderer/core/layout/build.gni
 index fd9840cca2..4acb1b82be 100644
 --- a/third_party/blink/renderer/core/layout/build.gni

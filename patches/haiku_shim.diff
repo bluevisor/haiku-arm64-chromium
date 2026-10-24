@@ -1,5 +1,5 @@
 diff --git a/haiku_shim/haiku_shim.cc b/haiku_shim/haiku_shim.cc
-index 611b7da..2b433e9 100644
+index 611b7da..2049f23 100644
 --- a/haiku_shim/haiku_shim.cc
 +++ b/haiku_shim/haiku_shim.cc
 @@ -15,6 +15,8 @@
@@ -11,7 +11,30 @@ index 611b7da..2b433e9 100644
  #include <Node.h>
  #include <NodeInfo.h>
  #include <Autolock.h>
-@@ -892,7 +894,11 @@ class BrowserChromeView : public BView, public BookmarkOpener {
+@@ -94,6 +96,22 @@ class ShimView : public BView {
+     bitmap_ = bitmap;
+   }
+ 
++  // The persistent front buffer for partial updates, remade on resize.
++  uint8_t* FrontBufferBits(int width, int height, int32_t* stride) {
++    if (bitmap_ == NULL || bitmap_->Bounds().IntegerWidth() + 1 != width
++        || bitmap_->Bounds().IntegerHeight() + 1 != height) {
++      delete bitmap_;
++      bitmap_ = new BBitmap(BRect(0, 0, width - 1, height - 1), B_RGBA32);
++      if (bitmap_->InitCheck() != B_OK) {
++        delete bitmap_;
++        bitmap_ = NULL;
++        return NULL;
++      }
++    }
++    *stride = bitmap_->BytesPerRow();
++    return static_cast<uint8_t*>(bitmap_->Bits());
++  }
++
+   void Draw(BRect update) {
+     if (bitmap_ != NULL) {
+       DrawBitmap(bitmap_, update, update);
+@@ -892,7 +910,11 @@ class BrowserChromeView : public BView, public BookmarkOpener {
  
  class ShimWindow : public BWindow, public NativeWindow {
   public:
@@ -24,7 +47,7 @@ index 611b7da..2b433e9 100644
        // Borderless is a window_look, not a window_type: the window_type enum
        // has no undecorated member, so this takes the look/feel constructor
        // and names the decoration directly.
-@@ -902,12 +908,17 @@ class ShimWindow : public BWindow, public NativeWindow {
+@@ -902,12 +924,17 @@ class ShimWindow : public BWindow, public NativeWindow {
        // is the content rect again -- Chromium never sees the toolbar strip.
        : BWindow(WindowFrameForContent(frame, with_toolbar),
                  "Chromium",
@@ -46,7 +69,7 @@ index 611b7da..2b433e9 100644
      // The content view is built already inset below the toolbar, so it reports
      // one correct size to Chromium instead of a mid-resize sequence. (The x86
      // port instead insets an already-shown view and had to pin it
-@@ -925,7 +936,10 @@ class ShimWindow : public BWindow, public NativeWindow {
+@@ -925,7 +952,10 @@ class ShimWindow : public BWindow, public NativeWindow {
      AddChild(view_);
      // Chromium places its first window at (0,0), which puts a titled
      // window's tab above the screen edge where nobody can see or grab it.
@@ -58,7 +81,7 @@ index 611b7da..2b433e9 100644
      // BWindow's constructor leaves the looper locked and does not start its
      // thread; Run() spawns it and drops the lock. Show() asserts the looper is
      // locked, so running here is what makes a later Show() safe.
-@@ -972,7 +986,9 @@ class ShimWindow : public BWindow, public NativeWindow {
+@@ -972,7 +1002,9 @@ class ShimWindow : public BWindow, public NativeWindow {
                                      with_toolbar_);
      MoveTo(f.left, f.top);
      ResizeTo(f.Width(), f.Height());
@@ -69,7 +92,30 @@ index 611b7da..2b433e9 100644
      UnlockLooper();
    }
  
-@@ -1136,6 +1152,7 @@ class ShimWindow : public BWindow, public NativeWindow {
+@@ -1035,6 +1067,22 @@ class ShimWindow : public BWindow, public NativeWindow {
+     UnlockLooper();
+   }
+ 
++  uint8_t* LockFrontBuffer(int width, int height, int32_t* stride) {
++    if (!LockLooper()) {
++      return NULL;
++    }
++    uint8_t* bits = view_->FrontBufferBits(width, height, stride);
++    if (bits == NULL) {
++      UnlockLooper();
++    }
++    return bits;
++  }
++
++  void UnlockFrontBuffer(float x, float y, float width, float height) {
++    view_->Invalidate(BRect(x, y, x + width - 1, y + height - 1));
++    UnlockLooper();
++  }
++
+   // Native toolbar state, pushed from Chromium's UI thread. Each takes the
+   // window lock; no-ops when the window has no toolbar.
+   void SetAddressText(const char* utf8) {
+@@ -1136,6 +1184,7 @@ class ShimWindow : public BWindow, public NativeWindow {
    BrowserChromeView* chrome_ = NULL;
    bool has_frame_ = false;
    bool with_toolbar_ = false;
@@ -77,7 +123,7 @@ index 611b7da..2b433e9 100644
  };
  
  }  // namespace
-@@ -1169,15 +1186,126 @@ extern "C" void HaikuShimEnsureApp() {
+@@ -1169,15 +1218,126 @@ extern "C" void HaikuShimEnsureApp() {
    } while (status == B_INTERRUPTED);
  }
  
@@ -206,7 +252,7 @@ index 611b7da..2b433e9 100644
  
  extern "C" void HaikuShimScreenFrame(float out_xywh[4]) {
 diff --git a/haiku_shim/haiku_shim.h b/haiku_shim/haiku_shim.h
-index 34afd0f..f4b3ab3 100644
+index 34afd0f..cff13f6 100644
 --- a/haiku_shim/haiku_shim.h
 +++ b/haiku_shim/haiku_shim.h
 @@ -5,6 +5,9 @@
@@ -219,7 +265,20 @@ index 34afd0f..f4b3ab3 100644
  // The boundary between Chromium and the BeAPI.
  //
  // Nothing on the Chromium side of this header may derive from a BeAPI class.
-@@ -134,17 +137,42 @@ void HaikuShimEnsureApp();
+@@ -106,6 +109,12 @@ class NativeWindow {
+                        float y,
+                        float width,
+                        float height) = 0;
++  // The view's persistent front buffer for partial updates: a B_RGBA32
++  // bitmap of width x height (made or remade when the size changes), locked
++  // with the window. Null when the window is gone or the bitmap failed.
++  // UnlockFrontBuffer() invalidates the rect and releases the window.
++  virtual uint8_t* LockFrontBuffer(int width, int height, int32_t* stride) = 0;
++  virtual void UnlockFrontBuffer(float x, float y, float width, float height) = 0;
+   // R Chromium native toolbar state, pushed from Chromium's UI thread. Each
+   // takes the window lock itself. No-ops when the window was created without
+   // a toolbar.
+@@ -134,17 +143,42 @@ void HaikuShimEnsureApp();
  
  // Builds the window and its view and leaves the window hidden and running on
  // its own thread.
