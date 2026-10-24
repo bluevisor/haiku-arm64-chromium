@@ -1,0 +1,104 @@
+diff --git a/haiku_shim/haiku_shim.cc b/haiku_shim/haiku_shim.cc
+index 611b7da..9080ae4 100644
+--- a/haiku_shim/haiku_shim.cc
++++ b/haiku_shim/haiku_shim.cc
+@@ -892,7 +892,11 @@ class BrowserChromeView : public BView, public BookmarkOpener {
+ 
+ class ShimWindow : public BWindow, public NativeWindow {
+  public:
+-  ShimWindow(BRect frame, bool has_frame, bool with_toolbar, Delegate* delegate)
++  ShimWindow(BRect frame,
++             bool has_frame,
++             bool with_toolbar,
++             bool popup,
++             Delegate* delegate)
+       // Borderless is a window_look, not a window_type: the window_type enum
+       // has no undecorated member, so this takes the look/feel constructor
+       // and names the decoration directly.
+@@ -902,12 +906,17 @@ class ShimWindow : public BWindow, public NativeWindow {
+       // is the content rect again -- Chromium never sees the toolbar strip.
+       : BWindow(WindowFrameForContent(frame, with_toolbar),
+                 "Chromium",
+-                has_frame ? B_TITLED_WINDOW_LOOK : B_NO_BORDER_WINDOW_LOOK,
+-                B_NORMAL_WINDOW_FEEL,
+-                B_ASYNCHRONOUS_CONTROLS),
++                has_frame && !popup ? B_TITLED_WINDOW_LOOK
++                                    : B_NO_BORDER_WINDOW_LOOK,
++                popup ? B_FLOATING_APP_WINDOW_FEEL : B_NORMAL_WINDOW_FEEL,
++                popup ? (B_ASYNCHRONOUS_CONTROLS | B_AVOID_FOCUS |
++                         B_AVOID_FRONT | B_NOT_MOVABLE | B_NOT_RESIZABLE |
++                         B_NOT_CLOSABLE | B_NOT_ZOOMABLE | B_NOT_MINIMIZABLE)
++                      : B_ASYNCHRONOUS_CONTROLS),
+         delegate_(delegate),
+         has_frame_(has_frame),
+-        with_toolbar_(with_toolbar) {
++        with_toolbar_(with_toolbar),
++        popup_(popup) {
+     // The content view is built already inset below the toolbar, so it reports
+     // one correct size to Chromium instead of a mid-resize sequence. (The x86
+     // port instead insets an already-shown view and had to pin it
+@@ -925,7 +934,10 @@ class ShimWindow : public BWindow, public NativeWindow {
+     AddChild(view_);
+     // Chromium places its first window at (0,0), which puts a titled
+     // window's tab above the screen edge where nobody can see or grab it.
+-    KeepDecorOnScreen();
++    // A popup is placed exactly where Chromium asked, next to its anchor.
++    if (!popup_) {
++      KeepDecorOnScreen();
++    }
+     // BWindow's constructor leaves the looper locked and does not start its
+     // thread; Run() spawns it and drops the lock. Show() asserts the looper is
+     // locked, so running here is what makes a later Show() safe.
+@@ -972,7 +984,9 @@ class ShimWindow : public BWindow, public NativeWindow {
+                                     with_toolbar_);
+     MoveTo(f.left, f.top);
+     ResizeTo(f.Width(), f.Height());
+-    KeepDecorOnScreen();
++    if (!popup_) {
++      KeepDecorOnScreen();
++    }
+     UnlockLooper();
+   }
+ 
+@@ -1136,6 +1150,7 @@ class ShimWindow : public BWindow, public NativeWindow {
+   BrowserChromeView* chrome_ = NULL;
+   bool has_frame_ = false;
+   bool with_toolbar_ = false;
++  bool popup_ = false;
+ };
+ 
+ }  // namespace
+@@ -1175,9 +1190,10 @@ extern "C" NativeWindow* HaikuShimCreateWindow(float x,
+                                                float height,
+                                                bool has_frame,
+                                                bool with_toolbar,
++                                               bool popup,
+                                                Delegate* delegate) {
+   BRect frame(x, y, x + width - 1, y + height - 1);
+-  return new ShimWindow(frame, has_frame, with_toolbar, delegate);
++  return new ShimWindow(frame, has_frame, with_toolbar, popup, delegate);
+ }
+ 
+ extern "C" void HaikuShimScreenFrame(float out_xywh[4]) {
+diff --git a/haiku_shim/haiku_shim.h b/haiku_shim/haiku_shim.h
+index 34afd0f..f3edc7e 100644
+--- a/haiku_shim/haiku_shim.h
++++ b/haiku_shim/haiku_shim.h
+@@ -134,12 +134,17 @@ void HaikuShimEnsureApp();
+ 
+ // Builds the window and its view and leaves the window hidden and running on
+ // its own thread.
++// `popup` is a menu, tooltip or bubble: borderless, floating above the
++// app's windows, and never taking focus or the front, so that the window it
++// belongs to stays active. Chromium cancels a menu when its owner window is
++// deactivated, which is what a normal-feel window did on Show().
+ NativeWindow* HaikuShimCreateWindow(float x,
+                               float y,
+                               float width,
+                               float height,
+                               bool has_frame,
+                               bool with_toolbar,
++                              bool popup,
+                               Delegate* delegate);
+ 
+ // The main screen's frame, as x, y, width, height.

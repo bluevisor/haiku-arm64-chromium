@@ -12,7 +12,7 @@ virglrenderer is built with Venus. Everything missing is on the Haiku side.
 | 1 | Haiku `virtio_gpu` kernel driver: 3D contexts, host-visible blobs, fences | done |
 | 2 | Mesa's Venus Vulkan driver built for Haiku | done |
 | 3 | Chromium WebGL through ANGLE's Vulkan backend on Venus | done: WebGL 2 on the host GPU (ANGLE fix + KosmicKrisp fix) |
-| 4 | GPU compositing and rasterization | |
+| 4 | GPU compositing and rasterization | works (opt-in `HAIKUCHROME_GPU_COMPOSITING=1`): readback view surface |
 
 ## Phase 1: kernel driver
 
@@ -224,3 +224,35 @@ With MoltenVK (no KosmicKrisp patch needed) the same path gives WebGL 1 only.
 The launcher (`vm/HaikuChrome`) now runs ANGLE on Venus by default, with
 SwiftShader kept as a fallback (`HAIKUCHROME_SWIFTSHADER=1`). Still to do:
 get the KosmicKrisp fix upstream so stock UTM works.
+
+## Phase 4: GPU compositing
+
+With Phase 3 only WebGL ran on the GPU; viz composited in software and
+rasterized every tile on the CPU. app_server has no GL or Vulkan surface to
+hand out, so the display path is the one the X11 backend uses without GLX
+(`GLSurfaceEglReadbackX11`): viz renders each frame into an EGL pbuffer on
+ANGLE, `SwapBuffers()` reads the pixels back (`glReadPixels`, BGRA), and
+they go to the BWindow the way the software compositor's bitmaps did.
+
+- `GLSurfaceEglReadbackHaiku` (`ui/ozone/platform/haiku/haiku_surface_factory.cc`)
+  subclasses `ui::GLSurfaceEglReadback`; `HandlePixels()` copies the rows
+  into a `BBitmap` and hands it to the window's `HaikuPresentTarget`, the
+  same thread-safe handle the canvas surface uses. `GLOzoneEGLHaiku::
+  CreateViewGLSurface()` builds one per widget from the window manager.
+- `gpu/ipc/service/image_transport_surface_haiku.cc` used to return null
+  from `CreateNativeGLSurface()`. viz then failed to create its output
+  surface and sent `DisableGpuCompositing()` to the browser before Ozone was
+  ever asked, while blink kept producing GPU resources: every renderer frame
+  was dropped with `resolved_frame_data.cc Invalid resource for SurfaceId`
+  and WebGL contexts were lost. It now calls
+  `gl::init::CreateViewGLSurface()` like Linux. (Finding that took a
+  `--v=1` run: the only trace is `viz_process_transport_factory.cc
+  "Switching to software compositing"`.)
+- The launcher keeps `--disable-gpu-compositing` unless
+  `HAIKUCHROME_GPU_COMPOSITING=1` is set, until this has soaked.
+
+Measured: WebGL Aquarium 500 fish at 22 fps with the whole 1800x1090 window
+read back per frame (25 fps when only the canvas was read back under software
+compositing), no GPU errors. The readback is one `glReadPixels` through
+Venus plus one `memcpy` into the BBitmap per frame; a mapped-blob readback
+or a damage-rect `PostSubBuffer` would cut it.

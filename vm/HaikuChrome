@@ -13,6 +13,12 @@ else
 	LIBRARY_PATH="%A/venus:%A/lib:$LIBRARY_PATH"
 	angle="--use-angle=vulkan"
 fi
+# GPU compositing (Phase 4): viz renders every frame on the GPU through a
+# readback surface. Opt-in while it is being proven.
+comp="--disable-gpu-compositing"
+if [ -n "$HAIKUCHROME_GPU_COMPOSITING" ]; then
+	comp=
+fi
 export LIBRARY_PATH
 # Deskbar shows a running app with its executable's icon. A deploy from Linux
 # drops BFS attributes, so put the icon back when it's missing.
@@ -31,7 +37,7 @@ ulimit -n 8192 2>/dev/null
 log=/boot/home/config/settings/HaikuChrome/chromium.log
 [ -f "$log" ] && mv -f "$log" "$log.1"
 exec ./Chromium --enable-logging=stderr --ozone-platform=haiku --no-sandbox --single-process \
-	--in-process-gpu --disable-gpu-compositing \
+	--in-process-gpu $comp \
 	$angle \
 	--use-fake-device-for-media-stream \
 	--user-data-dir=/boot/home/config/settings/HaikuChrome \

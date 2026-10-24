@@ -196,6 +196,11 @@ aarch64-unknown-haiku-g++ -shared haiku_shim.o -o libchromium_haiku.so \
 cp libchromium_haiku.so $S/boot/system/develop/lib/   # ozone links -lchromium_haiku
 ```
 
+Apply `patches/haiku_shim.diff` to that checkout first: it adds the `popup`
+argument to `HaikuShimCreateWindow()` (menus, tooltips and bubbles become
+borderless floating windows with `B_AVOID_FOCUS | B_AVOID_FRONT`, so opening
+the ⋮ menu no longer deactivates the browser window, which cancelled it).
+
 ## 7. Configure and build
 
 `out/haiku-arm64/args.gn`:
@@ -312,8 +317,10 @@ The GPU thread runs ANGLE on Venus (WebGL on the Mac's GPU, see
 `gpu/README.md`; with `HAIKUCHROME_SWIFTSHADER=1` it uses `lib/`'s
 SwiftShader and `--use-angle=swiftshader --enable-unsafe-swiftshader`
 instead), and the display compositor stays in software, so WebGL frames are
-read back into the window's bitmap. Replace the ANGLE flags with
-`--disable-gpu` to turn WebGL off.
+read back into the window's bitmap. `HAIKUCHROME_GPU_COMPOSITING=1` drops
+`--disable-gpu-compositing`: viz then renders every frame on the GPU through
+the readback view surface (`gpu/README.md`, Phase 4). Replace the ANGLE
+flags with `--disable-gpu` to turn WebGL off.
 
 `--force-dark-mode` is added when `ui_is_dark` reports that Haiku's panel
 color is dark. Build it on the VM with `g++ ui_is_dark.cpp -o ui_is_dark -lbe`.
