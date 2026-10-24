@@ -1,8 +1,17 @@
 diff --git a/haiku_shim/haiku_shim.cc b/haiku_shim/haiku_shim.cc
-index 611b7da..844bbdb 100644
+index 611b7da..2b433e9 100644
 --- a/haiku_shim/haiku_shim.cc
 +++ b/haiku_shim/haiku_shim.cc
-@@ -892,7 +892,11 @@ class BrowserChromeView : public BView, public BookmarkOpener {
+@@ -15,6 +15,8 @@
+ #include "haiku_shim.h"
+ 
+ #include <Application.h>
++#include <SoundPlayer.h>
++#include <MediaDefs.h>
+ #include <Node.h>
+ #include <NodeInfo.h>
+ #include <Autolock.h>
+@@ -892,7 +894,11 @@ class BrowserChromeView : public BView, public BookmarkOpener {
  
  class ShimWindow : public BWindow, public NativeWindow {
   public:
@@ -15,7 +24,7 @@ index 611b7da..844bbdb 100644
        // Borderless is a window_look, not a window_type: the window_type enum
        // has no undecorated member, so this takes the look/feel constructor
        // and names the decoration directly.
-@@ -902,12 +906,17 @@ class ShimWindow : public BWindow, public NativeWindow {
+@@ -902,12 +908,17 @@ class ShimWindow : public BWindow, public NativeWindow {
        // is the content rect again -- Chromium never sees the toolbar strip.
        : BWindow(WindowFrameForContent(frame, with_toolbar),
                  "Chromium",
@@ -37,7 +46,7 @@ index 611b7da..844bbdb 100644
      // The content view is built already inset below the toolbar, so it reports
      // one correct size to Chromium instead of a mid-resize sequence. (The x86
      // port instead insets an already-shown view and had to pin it
-@@ -925,7 +934,10 @@ class ShimWindow : public BWindow, public NativeWindow {
+@@ -925,7 +936,10 @@ class ShimWindow : public BWindow, public NativeWindow {
      AddChild(view_);
      // Chromium places its first window at (0,0), which puts a titled
      // window's tab above the screen edge where nobody can see or grab it.
@@ -49,7 +58,7 @@ index 611b7da..844bbdb 100644
      // BWindow's constructor leaves the looper locked and does not start its
      // thread; Run() spawns it and drops the lock. Show() asserts the looper is
      // locked, so running here is what makes a later Show() safe.
-@@ -972,7 +984,9 @@ class ShimWindow : public BWindow, public NativeWindow {
+@@ -972,7 +986,9 @@ class ShimWindow : public BWindow, public NativeWindow {
                                      with_toolbar_);
      MoveTo(f.left, f.top);
      ResizeTo(f.Width(), f.Height());
@@ -60,7 +69,7 @@ index 611b7da..844bbdb 100644
      UnlockLooper();
    }
  
-@@ -1136,6 +1150,7 @@ class ShimWindow : public BWindow, public NativeWindow {
+@@ -1136,6 +1152,7 @@ class ShimWindow : public BWindow, public NativeWindow {
    BrowserChromeView* chrome_ = NULL;
    bool has_frame_ = false;
    bool with_toolbar_ = false;
@@ -68,7 +77,117 @@ index 611b7da..844bbdb 100644
  };
  
  }  // namespace
-@@ -1175,9 +1190,16 @@ extern "C" NativeWindow* HaikuShimCreateWindow(float x,
+@@ -1169,15 +1186,126 @@ extern "C" void HaikuShimEnsureApp() {
+   } while (status == B_INTERRUPTED);
+ }
+ 
++namespace {
++
++struct SoundPlayerState {
++  HaikuShimSoundFillFunc fill;
++  void* cookie;
++  BSoundPlayer* player;
++  // Scratch for drivers that hand out 16-bit buffers.
++  float* scratch;
++  size_t scratch_frames;
++};
++
++void PlayBuffer(void* cookie, void* buffer, size_t size,
++                const media_raw_audio_format& format) {
++  SoundPlayerState* state = static_cast<SoundPlayerState*>(cookie);
++  const size_t channels = format.channel_count;
++  const size_t sample_size = format.format & media_raw_audio_format::B_AUDIO_SIZE_MASK;
++  if (channels == 0 || sample_size == 0) {
++    return;
++  }
++  const size_t frames = size / (channels * sample_size);
++  if (format.format == media_raw_audio_format::B_AUDIO_FLOAT) {
++    state->fill(state->cookie, static_cast<float*>(buffer), frames);
++    return;
++  }
++  if (state->scratch_frames < frames) {
++    delete[] state->scratch;
++    state->scratch = new float[frames * channels];
++    state->scratch_frames = frames;
++  }
++  state->fill(state->cookie, state->scratch, frames);
++  const size_t samples = frames * channels;
++  if (format.format == media_raw_audio_format::B_AUDIO_SHORT) {
++    int16* out = static_cast<int16*>(buffer);
++    for (size_t i = 0; i < samples; i++) {
++      float v = state->scratch[i];
++      v = v > 1.0f ? 1.0f : (v < -1.0f ? -1.0f : v);
++      out[i] = static_cast<int16>(v * 32767.0f);
++    }
++  } else if (format.format == media_raw_audio_format::B_AUDIO_INT) {
++    int32* out = static_cast<int32*>(buffer);
++    for (size_t i = 0; i < samples; i++) {
++      float v = state->scratch[i];
++      v = v > 1.0f ? 1.0f : (v < -1.0f ? -1.0f : v);
++      out[i] = static_cast<int32>(v * 2147483647.0f);
++    }
++  } else {
++    memset(buffer, 0, size);
++  }
++}
++
++}  // namespace
++
++extern "C" NativeSoundPlayer* HaikuShimSoundPlayerCreate(
++    int sample_rate, int channels, int frames_per_buffer,
++    HaikuShimSoundFillFunc fill, void* cookie) {
++  HaikuShimEnsureApp();
++  media_raw_audio_format format = media_raw_audio_format::wildcard;
++  format.frame_rate = sample_rate;
++  format.channel_count = channels;
++  format.format = media_raw_audio_format::B_AUDIO_FLOAT;
++  format.byte_order = B_MEDIA_HOST_ENDIAN;
++  format.buffer_size = frames_per_buffer * channels * sizeof(float);
++  SoundPlayerState* state = new SoundPlayerState{fill, cookie, NULL, NULL, 0};
++  state->player = new BSoundPlayer(&format, "Chromium", PlayBuffer, NULL, state);
++  if (state->player->InitCheck() != B_OK) {
++    delete state->player;
++    delete state;
++    return NULL;
++  }
++  return reinterpret_cast<NativeSoundPlayer*>(state);
++}
++
++extern "C" bool HaikuShimSoundPlayerStart(NativeSoundPlayer* player) {
++  SoundPlayerState* state = reinterpret_cast<SoundPlayerState*>(player);
++  if (state->player->Start() != B_OK) {
++    return false;
++  }
++  state->player->SetHasData(true);
++  return true;
++}
++
++extern "C" void HaikuShimSoundPlayerStop(NativeSoundPlayer* player) {
++  SoundPlayerState* state = reinterpret_cast<SoundPlayerState*>(player);
++  state->player->SetHasData(false);
++  state->player->Stop(true, true);
++}
++
++extern "C" void HaikuShimSoundPlayerSetVolume(NativeSoundPlayer* player,
++                                              float volume) {
++  reinterpret_cast<SoundPlayerState*>(player)->player->SetVolume(volume);
++}
++
++extern "C" int64_t HaikuShimSoundPlayerLatencyUs(NativeSoundPlayer* player) {
++  return reinterpret_cast<SoundPlayerState*>(player)->player->Latency();
++}
++
++extern "C" void HaikuShimSoundPlayerDestroy(NativeSoundPlayer* player) {
++  SoundPlayerState* state = reinterpret_cast<SoundPlayerState*>(player);
++  state->player->Stop(true, true);
++  delete state->player;
++  delete[] state->scratch;
++  delete state;
++}
++
+ extern "C" NativeWindow* HaikuShimCreateWindow(float x,
+                                                float y,
+                                                float width,
                                                 float height,
                                                 bool has_frame,
                                                 bool with_toolbar,
@@ -87,10 +206,20 @@ index 611b7da..844bbdb 100644
  
  extern "C" void HaikuShimScreenFrame(float out_xywh[4]) {
 diff --git a/haiku_shim/haiku_shim.h b/haiku_shim/haiku_shim.h
-index 34afd0f..f3edc7e 100644
+index 34afd0f..f4b3ab3 100644
 --- a/haiku_shim/haiku_shim.h
 +++ b/haiku_shim/haiku_shim.h
-@@ -134,12 +134,17 @@ void HaikuShimEnsureApp();
+@@ -5,6 +5,9 @@
+ #ifndef UI_OZONE_PLATFORM_HAIKU_HAIKU_SHIM_H_
+ #define UI_OZONE_PLATFORM_HAIKU_HAIKU_SHIM_H_
+ 
++#include <stddef.h>
++#include <stdint.h>
++
+ // The boundary between Chromium and the BeAPI.
+ //
+ // Nothing on the Chromium side of this header may derive from a BeAPI class.
+@@ -134,17 +137,42 @@ void HaikuShimEnsureApp();
  
  // Builds the window and its view and leaves the window hidden and running on
  // its own thread.
@@ -108,3 +237,28 @@ index 34afd0f..f3edc7e 100644
                                Delegate* delegate);
  
  // The main screen's frame, as x, y, width, height.
+ void HaikuShimScreenFrame(float out_xywh[4]);
+ 
++// Audio output through the media kit (BSoundPlayer), kept on this side of the
++// fence so Chromium never links libmedia. `fill` runs on the media kit's
++// thread and must write `frames` interleaved float frames of `channels`
++// channels; the buffer size is the media kit's choice, not the requested one.
++struct NativeSoundPlayer;
++typedef void (*HaikuShimSoundFillFunc)(void* cookie, float* interleaved,
++                                       size_t frames);
++// Null when there is no media server to talk to.
++NativeSoundPlayer* HaikuShimSoundPlayerCreate(int sample_rate,
++                                              int channels,
++                                              int frames_per_buffer,
++                                              HaikuShimSoundFillFunc fill,
++                                              void* cookie);
++bool HaikuShimSoundPlayerStart(NativeSoundPlayer* player);
++void HaikuShimSoundPlayerStop(NativeSoundPlayer* player);
++void HaikuShimSoundPlayerSetVolume(NativeSoundPlayer* player, float volume);
++// Output latency in microseconds.
++int64_t HaikuShimSoundPlayerLatencyUs(NativeSoundPlayer* player);
++void HaikuShimSoundPlayerDestroy(NativeSoundPlayer* player);
++
+ // Write a file's Haiku icon attributes from a 32-bit ARGB image, so an
+ // installed web app's launcher carries the site's own icon. `argb` is
+ // width*height non-premultiplied 0xAARRGGBB pixels -- SkColor's layout --

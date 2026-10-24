@@ -13,6 +13,7 @@ virglrenderer is built with Venus. Everything missing is on the Haiku side.
 | 2 | Mesa's Venus Vulkan driver built for Haiku | done |
 | 3 | Chromium WebGL through ANGLE's Vulkan backend on Venus | done: WebGL 2 on the host GPU (ANGLE fix + KosmicKrisp fix) |
 | 4 | GPU compositing and rasterization | done: readback view surface, on by default |
+| 5 | Sound | done: HDA driver + media kit for arm64, BSoundPlayer behind the shim |
 
 ## Phase 1: kernel driver
 
@@ -256,3 +257,46 @@ read back per frame (25 fps when only the canvas was read back under software
 compositing), no GPU errors. The readback is one `glReadPixels` through
 Venus plus one `memcpy` into the BBitmap per frame; a mapped-blob readback
 or a damage-rect `PostSubBuffer` would cut it.
+
+## Phase 5: sound
+
+Nothing in the chain existed: the VM had no audio device, the arm64 Haiku
+image is the "minimum" profile (no audio drivers, no media kit at all: no
+`libmedia.so`, no `media_server`), and the port's `audio_manager_haiku.cc`
+was `FakeAudioManager`.
+
+- **Device:** UTM's `intel-hda` (`Sound: [{"Hardware": "intel-hda"}]` in
+  `config.plist`; edit it with UTM quit, a running UTM writes its own copy
+  back). QEMU adds `-device intel-hda -device hda-duplex,audiodev=audio0` and
+  the audio reaches the Mac through SPICE. Haiku's `virtio_sound` is a
+  134-line probe stub, so virtio-sound is not an option.
+- **Guest:** built from the Haiku tree in `haiku-tools` with
+  `jam -q hda libmedia.so libgame.so media_server media_addon_server
+  mixer.media_addon hmulti_audio.media_addon` and installed under
+  `~/config/non-packaged`: `add-ons/kernel/drivers/bin/hda` with the
+  `drivers/dev/audio/hmulti/hda` symlink, the two media add-ons in
+  `add-ons/media`, the libraries in `lib`, the servers in `bin`
+  (`mimeset -f` them so the roster can find them by signature), and
+  `media_server` started from `vm/UserBootscript`. `hda` finds QEMU's codec
+  (`HDA: Detected controller @ PCI:0:3:0`) and publishes
+  `/dev/audio/hmulti/hda/0`; the mixer connects to it.
+- **Shim:** `HaikuShimSoundPlayer*` wraps `BSoundPlayer` (`libmedia` stays
+  on the gcc side; `-lmedia` added to the shim link, `libmedia.so` copied into
+  the cross sysroot). Float, 48 kHz, stereo, whatever buffer size the media
+  kit decides.
+- **Chromium:** `media/audio/haiku/` has a real `AudioManagerHaiku` and
+  `AudioOutputStreamHaiku` (output only; input stays absent). The media kit
+  pulls on its own thread in its own buffer sizes, so a FIFO sits between its
+  pulls and `OnMoreData()`.
+
+Two things cost time. `BSoundPlayer::Latency()` must not be called from the
+fill callback: it is a `BMediaRoster` round trip to the player's own node,
+whose thread is the one running the callback, so it deadlocks until the port
+times out (`QueryPort: read_port failed ... Operation timed out`, about 13 s)
+and the graph stalls after the first buffer. Latency is read once after
+`Start()` and cached. And the audio service's sync socket to the renderer
+reported `ENOTCONN` in early runs: that is just how Haiku reports a peer
+that went away; the real fault was the stall.
+
+`sound-probe.html` plays a WebAudio tone and an `<audio>` WAV and logs
+`currentTime`, which only advances once the whole chain pulls.

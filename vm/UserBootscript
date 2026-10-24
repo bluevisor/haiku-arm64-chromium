@@ -1,0 +1,35 @@
+#!/bin/sh
+
+# DO NOT EDIT!
+#=====================================================================
+# Start programs and open files in the boot launch folder
+for file in "$HOME"/config/settings/boot/launch/*
+do 
+	[ -e "$file" ] && /bin/open "$file" &
+done
+#=====================================================================
+# FEEL FREE TO EDIT BELOW
+
+# Add custom commands to execute at every startup here.
+
+# This file is a standard bash script. For more information regarding shell 
+# scripts, refer to any online documentation for "bash scripting"
+
+# During boot, the commands listed in this script will be executed.
+# Typically, you will want to include a trailing '&' on each line.
+# This will allow the script to execute that command and process the next line.
+
+# To launch certain applications at boot-up, put links to those applications in
+# the above boot launch directory.
+
+# start OpenSSH server (openssh package)
+/boot/system/bin/sshd
+
+# Haiku arm64 has no driver for QEMU's RTC, so the clock starts at 1970 every boot.
+# Sync it over NTP (retry until the network is up); TLS certificate checks need it.
+( for i in $(seq 1 24); do /boot/system/preferences/Time --update && break; sleep 5; done ) >/dev/null 2>&1 &
+# The arm64 image has no media kit; it was built from the Haiku tree and lives
+# in non-packaged (see haiku-arm64-chromium gpu/README.md, sound).
+if [ -x /boot/home/config/non-packaged/bin/media_server ]; then
+	/boot/home/config/non-packaged/bin/media_server > /dev/null 2>&1 &
+fi

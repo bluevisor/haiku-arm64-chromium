@@ -298,6 +298,13 @@ Keep the tar in its own ssh command. `ssh haiku 'tar -xf - && nohup … &'`
 backgrounds the whole `&&` list, so tar reads `/dev/null` and fails with
 "This does not look like a tar archive".
 
+## 8b. Sound
+
+See `gpu/README.md`, Phase 5: an `intel-hda` device in the VM, Haiku's `hda`
+driver plus the media kit built for arm64 and installed under
+`~/config/non-packaged` (started by `vm/UserBootscript`), and a
+`BSoundPlayer`-backed `AudioManagerHaiku` through the shim.
+
 ## 9. Launcher and Deskbar entry
 
 `vm/HaikuChrome` goes into `/boot/home/HaikuChrome/`. It sets

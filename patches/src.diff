@@ -10975,15 +10975,23 @@ index 6824969ae3..110000284a 100644
  struct ParamTraits<long> {
    typedef long param_type;
 diff --git a/media/audio/BUILD.gn b/media/audio/BUILD.gn
-index 42f2bcc4ed..1e6cb26923 100644
+index 42f2bcc4ed..f12e0eb2c4 100644
 --- a/media/audio/BUILD.gn
 +++ b/media/audio/BUILD.gn
-@@ -294,6 +294,10 @@ source_set("audio") {
+@@ -294,6 +294,18 @@ source_set("audio") {
      sources += [ "linux/audio_manager_linux.cc" ]
    }
  
 +  if (is_haiku) {
-+    sources += [ "haiku/audio_manager_haiku.cc" ]
++    sources += [
++      "haiku/audio_manager_haiku.cc",
++      "haiku/audio_manager_haiku.h",
++      "haiku/audio_output_stream_haiku.cc",
++      "haiku/audio_output_stream_haiku.h",
++      "haiku/haiku_sound_shim.h",
++    ]
++    # BSoundPlayer, behind the C interface of the BeAPI shim.
++    libs += [ "chromium_haiku" ]
 +  }
 +
    if (use_alsa) {
