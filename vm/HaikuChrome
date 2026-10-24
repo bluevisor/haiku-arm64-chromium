@@ -29,6 +29,7 @@ ulimit -n 8192 2>/dev/null
 # Crashes are caught by Chromium's own handler, so keep the last run's stderr
 # (a "Received signal" trace ends it) where a Deskbar launch would lose it.
 log=/boot/home/config/settings/HaikuChrome/chromium.log
+[ -f "$log" ] && mv -f "$log" "$log.1"
 exec ./Chromium --enable-logging=stderr --ozone-platform=haiku --no-sandbox --single-process \
 	--in-process-gpu --disable-gpu-compositing \
 	$angle \
