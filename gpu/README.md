@@ -301,8 +301,12 @@ was `FakeAudioManager`.
   kit decides.
 - **Chromium:** `media/audio/haiku/` has a real `AudioManagerHaiku` and
   `AudioOutputStreamHaiku` (output only; input stays absent). The media kit
-  pulls on its own thread in its own buffer sizes, so a FIFO sits between its
-  pulls and `OnMoreData()`.
+  pulls on its own thread in its own buffer sizes, and that thread must never
+  wait (it also runs the player node's control loop), so a real-time pump
+  thread of our own calls `OnMoreData()` three buffers ahead into a FIFO and
+  the media kit callback only drains it. Before the pump, every late renderer
+  reply (video decode is on the CPU) became a gap of silence: popping on
+  YouTube. Underruns are counted and logged (`Haiku audio underrun`).
 
 Two things cost time. `BSoundPlayer::Latency()` must not be called from the
 fill callback: it is a `BMediaRoster` round trip to the player's own node,
