@@ -306,9 +306,17 @@ aarch64) ...`, `navigator.platform` "Linux aarch64", `Sec-CH-UA-Platform`
 `navigator_id.cc` and `navigator_base.cc`). Bot checks and sign-in flows keep
 allowlists of OS tokens and an honest "Haiku" fails all of them; Google's
 sign-in page now loads where content_shell was refused outright. The WebGL
-renderer string still names Venus and the Apple GPU. The launcher also
-exports `TZ` (the arm64 image has no zone data, and "Etc/Unknown" is a
-fingerprint of its own).
+renderer string still names Venus and the Apple GPU.
+
+Cloudflare's Turnstile widget itself works (its always-pass and always-block
+test sitekeys behave correctly, checked over the DevTools protocol:
+`--remote-debugging-port=9222` plus `ssh -L` from the Mac), but sites behind
+a managed challenge (shadertoy.com) still spin at "Verifying": Cloudflare
+scores the connection server-side, and this build speaks no HTTP/3 (QUIC's
+UDP sockets return `ERR_NOT_IMPLEMENTED` on Haiku), which a Chrome on Linux
+would. Pages see `Etc/Unknown` as the timezone: the arm64 image has no zone
+data, and exporting `TZ` is not an option, it makes every `localtime_r()`
+segfault inside `libroot-addon-icu` (`ICULocaleBackend::TZSet`).
 
 ## 8b. Sound
 
