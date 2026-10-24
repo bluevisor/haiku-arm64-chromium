@@ -1,0 +1,1088 @@
+diff --git a/src/virtio/vulkan/meson.build b/src/virtio/vulkan/meson.build
+index fda382d..c428c4e 100644
+--- a/src/virtio/vulkan/meson.build
++++ b/src/virtio/vulkan/meson.build
+@@ -126,6 +126,16 @@ if not with_platform_windows
+   libvn_files += files('vn_renderer_vtest.c')
+ endif
+ 
++if host_machine.system() == 'haiku'
++  # the virtio_gpu render node; see vn_renderer_haiku.c
++  libvn_files += files(
++    'vn_renderer_haiku.c',
++    'vn_renderer_sim_syncobj.c',
++  )
++  # the sockets of the vtest renderer
++  vn_deps += cc.find_library('network')
++endif
++
+ if system_has_kms_drm
+   libvn_files += files(
+     'vn_renderer_sim_syncobj.c',
+diff --git a/src/virtio/vulkan/virtio_gpu_3d.h b/src/virtio/vulkan/virtio_gpu_3d.h
+new file mode 100644
+index 0000000..da0df53
+--- /dev/null
++++ b/src/virtio/vulkan/virtio_gpu_3d.h
+@@ -0,0 +1,157 @@
++/*
++ * Copyright 2026, Haiku, Inc. All Rights Reserved.
++ * Distributed under the terms of the MIT License.
++ */
++#ifndef VIRTIO_GPU_3D_H
++#define VIRTIO_GPU_3D_H
++
++
++#include <Drivers.h>
++
++
++/*
++ * 3D interface of the virtio_gpu driver. Besides the display device under
++ * /dev/graphics, the driver publishes a render node per GPU in
++ * VIRTIO_GPU_RENDER_DEVICE_DIR. It follows the Linux virtgpu DRM uAPI, so
++ * that Mesa's virtgpu backends (Venus) port with few changes: every open
++ * file gets at most one context, buffer handles are per file, and the structs
++ * have the layout of their drm_virtgpu_* counterparts where the semantics
++ * match. The differences:
++ *
++ *  - GETPARAM returns the value in the struct instead of through a pointer.
++ *  - MAP maps the blob into the calling team and returns its address; there
++ *    is no mmap() on the device. UNMAP removes that mapping again.
++ *  - EXECBUFFER returns a fence id instead of a sync_file fd. Another open of
++ *    the render node bound to that id with FENCE_BIND becomes readable
++ *    (select()/poll()) once the fence has signaled, which stands in for the
++ *    sync_file.
++ */
++
++#define VIRTIO_GPU_RENDER_DEVICE_DIR	"/dev/misc/virtio_gpu"
++
++
++enum {
++	VIRTIO_GPU_3D_GETPARAM = B_DEVICE_OP_CODES_END + 0x100,
++	VIRTIO_GPU_3D_GET_CAPS,
++	VIRTIO_GPU_3D_CONTEXT_INIT,
++	VIRTIO_GPU_3D_RESOURCE_CREATE_BLOB,
++	VIRTIO_GPU_3D_RESOURCE_INFO,
++	VIRTIO_GPU_3D_MAP,
++	VIRTIO_GPU_3D_UNMAP,
++	VIRTIO_GPU_3D_CLOSE_HANDLE,
++	VIRTIO_GPU_3D_EXECBUFFER,
++	VIRTIO_GPU_3D_FENCE_BIND,
++	VIRTIO_GPU_3D_FENCE_WAIT,
++};
++
++
++/* GETPARAM, same values as Linux's VIRTGPU_PARAM_* */
++#define VIRTIO_GPU_3D_PARAM_3D_FEATURES				1
++#define VIRTIO_GPU_3D_PARAM_CAPSET_QUERY_FIX		2
++#define VIRTIO_GPU_3D_PARAM_RESOURCE_BLOB			3
++#define VIRTIO_GPU_3D_PARAM_HOST_VISIBLE			4
++#define VIRTIO_GPU_3D_PARAM_CROSS_DEVICE			5
++#define VIRTIO_GPU_3D_PARAM_CONTEXT_INIT			6
++#define VIRTIO_GPU_3D_PARAM_SUPPORTED_CAPSET_IDS	7
++#define VIRTIO_GPU_3D_PARAM_EXPLICIT_DEBUG_NAME		8
++#define VIRTIO_GPU_3D_PARAM_BLOB_ALIGNMENT			9
++
++struct virtio_gpu_3d_getparam {
++	uint64	param;
++	uint64	value;			/* out */
++};
++
++/* GET_CAPS */
++#define VIRTIO_GPU_3D_CAPSET_VIRGL		1
++#define VIRTIO_GPU_3D_CAPSET_VIRGL2		2
++#define VIRTIO_GPU_3D_CAPSET_VENUS		4
++#define VIRTIO_GPU_3D_CAPSET_DRM		6
++
++struct virtio_gpu_3d_get_caps {
++	uint32	cap_set_id;
++	uint32	cap_set_ver;
++	uint64	addr;			/* buffer for the capset data */
++	uint32	size;
++	uint32	pad;
++};
++
++/* CONTEXT_INIT */
++#define VIRTIO_GPU_3D_CONTEXT_PARAM_CAPSET_ID		1
++#define VIRTIO_GPU_3D_CONTEXT_PARAM_NUM_RINGS		2
++#define VIRTIO_GPU_3D_CONTEXT_PARAM_POLL_RINGS_MASK	3
++#define VIRTIO_GPU_3D_CONTEXT_PARAM_DEBUG_NAME		4
++
++struct virtio_gpu_3d_context_set_param {
++	uint64	param;
++	uint64	value;
++};
++
++struct virtio_gpu_3d_context_init {
++	uint32	num_params;
++	uint32	pad;
++	uint64	ctx_set_params;	/* array of virtio_gpu_3d_context_set_param */
++};
++
++/* RESOURCE_CREATE_BLOB */
++#define VIRTIO_GPU_3D_BLOB_MEM_GUEST			0x0001
++#define VIRTIO_GPU_3D_BLOB_MEM_HOST3D			0x0002
++#define VIRTIO_GPU_3D_BLOB_MEM_HOST3D_GUEST		0x0003
++
++#define VIRTIO_GPU_3D_BLOB_FLAG_USE_MAPPABLE	0x0001
++#define VIRTIO_GPU_3D_BLOB_FLAG_USE_SHAREABLE	0x0002
++#define VIRTIO_GPU_3D_BLOB_FLAG_USE_CROSS_DEVICE	0x0004
++
++struct virtio_gpu_3d_resource_create_blob {
++	uint32	blob_mem;
++	uint32	blob_flags;
++	uint32	bo_handle;		/* out */
++	uint32	res_handle;		/* out */
++	uint64	size;			/* a multiple of PARAM_BLOB_ALIGNMENT */
++	uint32	pad;
++	uint32	cmd_size;
++	uint64	cmd;			/* submitted to the context before the create */
++	uint64	blob_id;
++};
++
++/* RESOURCE_INFO */
++struct virtio_gpu_3d_resource_info {
++	uint32	bo_handle;
++	uint32	res_handle;		/* out */
++	uint32	size;			/* out */
++	uint32	blob_mem;		/* out */
++};
++
++/* MAP */
++struct virtio_gpu_3d_map {
++	uint32	handle;
++	int32	area;			/* out */
++	uint64	address;		/* out */
++};
++
++/* UNMAP, CLOSE_HANDLE */
++struct virtio_gpu_3d_handle {
++	uint32	handle;
++	uint32	pad;
++};
++
++/* EXECBUFFER */
++#define VIRTIO_GPU_3D_EXECBUF_FENCE		0x01	/* return a fence id */
++#define VIRTIO_GPU_3D_EXECBUF_RING_IDX	0x02	/* fence on ring_idx's timeline */
++
++struct virtio_gpu_3d_execbuffer {
++	uint32	flags;
++	uint32	size;
++	uint64	command;
++	uint32	ring_idx;
++	uint32	pad;
++	uint64	fence_id;		/* out, 0 without EXECBUF_FENCE */
++};
++
++/* FENCE_BIND, FENCE_WAIT */
++struct virtio_gpu_3d_fence {
++	uint64	fence_id;
++	int64	timeout;		/* FENCE_WAIT only: microseconds, < 0 waits forever */
++};
++
++
++#endif	/* VIRTIO_GPU_3D_H */
+diff --git a/src/virtio/vulkan/vn_common.h b/src/virtio/vulkan/vn_common.h
+index 86235f6..87b7f95 100644
+--- a/src/virtio/vulkan/vn_common.h
++++ b/src/virtio/vulkan/vn_common.h
+@@ -52,7 +52,11 @@
+ #if DETECT_OS_WINDOWS
+ #include <processthreadsapi.h>
+ #else
++#if DETECT_OS_HAIKU
++#include <OS.h>
++#else
+ #include <sys/syscall.h>
++#endif
+ 
+ #include "drm-uapi/drm_fourcc.h"
+ #include "util/libsync.h"
+@@ -648,6 +652,8 @@ vn_gettid(void)
+    return syscall(SYS_thr_self);
+ #elif DETECT_OS_WINDOWS
+    return GetCurrentThreadId();
++#elif DETECT_OS_HAIKU
++   return find_thread(NULL);
+ #else
+    return syscall(SYS_gettid);
+ #endif
+diff --git a/src/virtio/vulkan/vn_renderer.h b/src/virtio/vulkan/vn_renderer.h
+index ea224ea..8733502 100644
+--- a/src/virtio/vulkan/vn_renderer.h
++++ b/src/virtio/vulkan/vn_renderer.h
+@@ -213,7 +213,7 @@ struct vn_renderer {
+    struct vn_renderer_sync_ops sync_ops;
+ };
+ 
+-#ifdef HAVE_LIBDRM
++#if defined(HAVE_LIBDRM) || defined(__HAIKU__)
+ VkResult
+ vn_renderer_create_virtgpu(struct vn_instance *instance,
+                            const VkAllocationCallbacks *alloc,
+@@ -230,7 +230,7 @@ vn_renderer_create(struct vn_instance *instance,
+                    const VkAllocationCallbacks *alloc,
+                    struct vn_renderer **renderer)
+ {
+-#ifdef HAVE_LIBDRM
++#if defined(HAVE_LIBDRM) || defined(__HAIKU__)
+    VkResult result;
+    if (VN_DEBUG(VTEST)) {
+       result = vn_renderer_create_vtest(instance, alloc, renderer);
+diff --git a/src/virtio/vulkan/vn_renderer_haiku.c b/src/virtio/vulkan/vn_renderer_haiku.c
+new file mode 100644
+index 0000000..ac9b7cc
+--- /dev/null
++++ b/src/virtio/vulkan/vn_renderer_haiku.c
+@@ -0,0 +1,851 @@
++/*
++ * Copyright 2020 Google LLC
++ * Copyright 2026 Haiku, Inc.
++ * SPDX-License-Identifier: MIT
++ */
++
++/* The Venus renderer for Haiku's virtio_gpu render node. It follows
++ * vn_renderer_virtgpu.c; the kernel interface (virtio_gpu_3d.h) mirrors the
++ * Linux virtgpu uAPI with two differences: MAP returns an address mapped into
++ * the team instead of an mmap() offset, and a fenced EXECBUFFER returns a
++ * fence id. A render node file bound to that id with FENCE_BIND becomes
++ * readable once the fence signals, which is what the simulated syncobjs
++ * expect from a sync_file. There is no dma-buf on Haiku, so nothing is
++ * imported or exported that way.
++ */
++
++#include <errno.h>
++#include <fcntl.h>
++#include <stdio.h>
++#include <unistd.h>
++
++#include "drm-uapi/drm.h"
++#include "virtio/virtio-gpu/venus_hw.h"
++#include "util/sparse_array.h"
++#include "util/u_sync_provider.h"
++
++#include "virtio_gpu_3d.h"
++#include "vn_renderer_internal.h"
++#include "vn_renderer_sim_syncobj.h"
++
++#define HAIKU_GPU_MAX_NODES 8
++
++struct haiku_shmem {
++   struct vn_renderer_shmem base;
++   uint32_t handle;
++};
++
++struct haiku_bo {
++   struct vn_renderer_bo base;
++   uint32_t handle;
++   uint32_t blob_flags;
++};
++
++struct haiku_gpu {
++   struct vn_renderer base;
++
++   struct vn_instance *instance;
++
++   int fd;
++   char path[64];
++
++   struct {
++      uint32_t id;
++      uint32_t version;
++      struct virgl_renderer_capset_venus data;
++   } capset;
++
++   uint32_t shmem_blob_mem;
++   uint32_t bo_blob_mem;
++   /* blob sizes must be multiples of this (a power of two) */
++   uint32_t blob_alignment;
++
++   struct util_sparse_array shmem_array;
++   struct util_sparse_array bo_array;
++
++   struct vn_renderer_shmem_cache shmem_cache;
++
++   struct util_sync_provider *sync;
++};
++
++static uint64_t
++haiku_ioctl_getparam(struct haiku_gpu *gpu, uint64_t param)
++{
++   struct virtio_gpu_3d_getparam args = {
++      .param = param,
++   };
++
++   const int ret =
++      ioctl(gpu->fd, VIRTIO_GPU_3D_GETPARAM, &args, sizeof(args));
++   return ret ? 0 : args.value;
++}
++
++static int
++haiku_ioctl_get_caps(struct haiku_gpu *gpu,
++                     uint32_t id,
++                     uint32_t version,
++                     void *capset,
++                     size_t capset_size)
++{
++   struct virtio_gpu_3d_get_caps args = {
++      .cap_set_id = id,
++      .cap_set_ver = version,
++      .addr = (uintptr_t)capset,
++      .size = capset_size,
++   };
++
++   return ioctl(gpu->fd, VIRTIO_GPU_3D_GET_CAPS, &args, sizeof(args));
++}
++
++static int
++haiku_ioctl_context_init(struct haiku_gpu *gpu, uint32_t capset_id)
++{
++   struct virtio_gpu_3d_context_set_param ctx_set_params[3] = {
++      {
++         .param = VIRTIO_GPU_3D_CONTEXT_PARAM_CAPSET_ID,
++         .value = capset_id,
++      },
++      {
++         .param = VIRTIO_GPU_3D_CONTEXT_PARAM_NUM_RINGS,
++         .value = 64,
++      },
++      {
++         .param = VIRTIO_GPU_3D_CONTEXT_PARAM_POLL_RINGS_MASK,
++         .value = 0,
++      },
++   };
++
++   struct virtio_gpu_3d_context_init args = {
++      .num_params = ARRAY_SIZE(ctx_set_params),
++      .ctx_set_params = (uintptr_t)&ctx_set_params,
++   };
++
++   return ioctl(gpu->fd, VIRTIO_GPU_3D_CONTEXT_INIT, &args, sizeof(args));
++}
++
++static uint32_t
++haiku_ioctl_resource_create_blob(struct haiku_gpu *gpu,
++                                 struct vn_renderer_submit_batch *batch,
++                                 uint32_t blob_mem,
++                                 uint32_t blob_flags,
++                                 size_t blob_size,
++                                 uint64_t blob_id,
++                                 uint32_t *res_id)
++{
++   struct virtio_gpu_3d_resource_create_blob args = {
++      .blob_mem = blob_mem,
++      .blob_flags = blob_flags,
++      .size = align64(blob_size, gpu->blob_alignment),
++      .cmd_size = batch ? batch->cs_size : 0,
++      .cmd = batch ? (uintptr_t)batch->cs_data : 0,
++      .blob_id = blob_id,
++   };
++
++   if (ioctl(gpu->fd, VIRTIO_GPU_3D_RESOURCE_CREATE_BLOB, &args,
++             sizeof(args))) {
++      vn_log(gpu->instance,
++             "RESOURCE_CREATE_BLOB failed: type=%u, flags=%u, size=%zu, "
++             "id=%" PRIu64 ", err=%s",
++             blob_mem, blob_flags, blob_size, blob_id, strerror(errno));
++      return 0;
++   }
++
++   *res_id = args.res_handle;
++   return args.bo_handle;
++}
++
++static int
++haiku_ioctl_resource_info(struct haiku_gpu *gpu,
++                          uint32_t handle,
++                          struct virtio_gpu_3d_resource_info *info)
++{
++   *info = (struct virtio_gpu_3d_resource_info){
++      .bo_handle = handle,
++   };
++
++   const int ret =
++      ioctl(gpu->fd, VIRTIO_GPU_3D_RESOURCE_INFO, info, sizeof(*info));
++   if (ret) {
++      vn_log(gpu->instance, "RESOURCE_INFO failed: handle=%u, err=%s",
++             handle, strerror(errno));
++   }
++   return ret;
++}
++
++static void
++haiku_ioctl_close_handle(struct haiku_gpu *gpu, uint32_t handle)
++{
++   struct virtio_gpu_3d_handle args = {
++      .handle = handle,
++   };
++
++   ASSERTED const int ret =
++      ioctl(gpu->fd, VIRTIO_GPU_3D_CLOSE_HANDLE, &args, sizeof(args));
++   assert(!ret);
++}
++
++static void *
++haiku_ioctl_map(struct haiku_gpu *gpu, uint32_t handle, void *placed_addr)
++{
++   /* The kernel picks the address. */
++   if (placed_addr) {
++      vn_log(gpu->instance, "placed mappings are not supported");
++      return NULL;
++   }
++
++   struct virtio_gpu_3d_map args = {
++      .handle = handle,
++   };
++
++   if (ioctl(gpu->fd, VIRTIO_GPU_3D_MAP, &args, sizeof(args))) {
++      vn_log(gpu->instance, "MAP failed: handle=%u, err=%s", handle,
++             strerror(errno));
++      return NULL;
++   }
++
++   return (void *)(uintptr_t)args.address;
++}
++
++static void
++haiku_ioctl_unmap(struct haiku_gpu *gpu, uint32_t handle)
++{
++   struct virtio_gpu_3d_handle args = {
++      .handle = handle,
++   };
++
++   ioctl(gpu->fd, VIRTIO_GPU_3D_UNMAP, &args, sizeof(args));
++}
++
++/* Returns a new file that becomes readable once the fence signals. */
++static int
++haiku_fence_fd(struct haiku_gpu *gpu, uint64_t fence_id)
++{
++   int fd = open(gpu->path, O_RDWR | O_CLOEXEC);
++   if (fd < 0)
++      return -1;
++
++   struct virtio_gpu_3d_fence args = {
++      .fence_id = fence_id,
++   };
++   if (ioctl(fd, VIRTIO_GPU_3D_FENCE_BIND, &args, sizeof(args))) {
++      close(fd);
++      return -1;
++   }
++
++   return fd;
++}
++
++static VkResult
++haiku_sync_write(struct vn_renderer *renderer,
++                 struct vn_renderer_sync *sync,
++                 uint64_t val)
++{
++   struct haiku_gpu *gpu = (struct haiku_gpu *)renderer;
++
++   assert(renderer->info.has_timeline_sync);
++   int ret =
++      gpu->sync->timeline_signal(gpu->sync, &sync->syncobj_handle, &val, 1);
++
++   return ret ? VK_ERROR_OUT_OF_DEVICE_MEMORY : VK_SUCCESS;
++}
++
++static VkResult
++haiku_sync_read(struct vn_renderer *renderer,
++                struct vn_renderer_sync *sync,
++                uint64_t *val)
++{
++   struct haiku_gpu *gpu = (struct haiku_gpu *)renderer;
++
++   int ret = gpu->sync->query(gpu->sync, &sync->syncobj_handle, val, 1, 0);
++
++   return ret ? VK_ERROR_OUT_OF_DEVICE_MEMORY : VK_SUCCESS;
++}
++
++static VkResult
++haiku_sync_reset(struct vn_renderer *renderer, struct vn_renderer_sync *sync)
++{
++   struct haiku_gpu *gpu = (struct haiku_gpu *)renderer;
++
++   int ret = gpu->sync->reset(gpu->sync, &sync->syncobj_handle, 1);
++   return ret ? VK_ERROR_OUT_OF_DEVICE_MEMORY : VK_SUCCESS;
++}
++
++static int
++haiku_sync_export_syncobj(struct vn_renderer *renderer,
++                          struct vn_renderer_sync *sync,
++                          bool sync_file)
++{
++   struct haiku_gpu *gpu = (struct haiku_gpu *)renderer;
++
++   int ret, fd;
++   if (sync_file)
++      ret = gpu->sync->export_sync_file(gpu->sync, sync->syncobj_handle, &fd);
++   else
++      ret = -1;
++
++   return ret ? -1 : fd;
++}
++
++static void
++haiku_sync_destroy(struct vn_renderer *renderer,
++                   struct vn_renderer_sync *sync)
++{
++   struct haiku_gpu *gpu = (struct haiku_gpu *)renderer;
++
++   gpu->sync->destroy(gpu->sync, sync->syncobj_handle);
++
++   free(sync);
++}
++
++static VkResult
++haiku_sync_create_from_syncobj(struct vn_renderer *renderer,
++                               int fd,
++                               bool sync_file,
++                               struct vn_renderer_sync **out_sync)
++{
++   struct haiku_gpu *gpu = (struct haiku_gpu *)renderer;
++
++   if (!sync_file)
++      return VK_ERROR_INVALID_EXTERNAL_HANDLE;
++
++   uint32_t syncobj_handle;
++   if (gpu->sync->create(gpu->sync, 0, &syncobj_handle))
++      return VK_ERROR_OUT_OF_HOST_MEMORY;
++   if (gpu->sync->import_sync_file(gpu->sync, syncobj_handle, fd)) {
++      gpu->sync->destroy(gpu->sync, syncobj_handle);
++      return VK_ERROR_INVALID_EXTERNAL_HANDLE;
++   }
++
++   struct vn_renderer_sync *sync = calloc(1, sizeof(*sync));
++   if (!sync) {
++      gpu->sync->destroy(gpu->sync, syncobj_handle);
++      return VK_ERROR_OUT_OF_HOST_MEMORY;
++   }
++
++   sync->syncobj_handle = syncobj_handle;
++   *out_sync = sync;
++
++   return VK_SUCCESS;
++}
++
++static VkResult
++haiku_sync_create(struct vn_renderer *renderer,
++                  uint64_t initial_val,
++                  struct vn_renderer_sync **out_sync)
++{
++   struct haiku_gpu *gpu = (struct haiku_gpu *)renderer;
++
++   /* the simulated syncobjs are binary */
++   assert(initial_val <= 1);
++   const uint32_t flags = initial_val ? DRM_SYNCOBJ_CREATE_SIGNALED : 0;
++   uint32_t syncobj_handle;
++   if (gpu->sync->create(gpu->sync, flags, &syncobj_handle))
++      return VK_ERROR_OUT_OF_DEVICE_MEMORY;
++
++   struct vn_renderer_sync *sync = calloc(1, sizeof(*sync));
++   if (!sync) {
++      gpu->sync->destroy(gpu->sync, syncobj_handle);
++      return VK_ERROR_OUT_OF_HOST_MEMORY;
++   }
++
++   sync->syncobj_handle = syncobj_handle;
++   *out_sync = sync;
++
++   return VK_SUCCESS;
++}
++
++static void
++haiku_bo_invalidate(struct vn_renderer *renderer,
++                    struct vn_renderer_bo *bo,
++                    VkDeviceSize offset,
++                    VkDeviceSize size)
++{
++   /* nop because the kernel maps blobs coherently */
++}
++
++static void
++haiku_bo_flush(struct vn_renderer *renderer,
++               struct vn_renderer_bo *bo,
++               VkDeviceSize offset,
++               VkDeviceSize size)
++{
++   /* nop because the kernel maps blobs coherently */
++}
++
++static void *
++haiku_bo_map(struct vn_renderer *renderer,
++             struct vn_renderer_bo *_bo,
++             void *placed_addr)
++{
++   struct haiku_gpu *gpu = (struct haiku_gpu *)renderer;
++   struct haiku_bo *bo = (struct haiku_bo *)_bo;
++   const bool mappable = bo->blob_flags & VIRTIO_GPU_3D_BLOB_FLAG_USE_MAPPABLE;
++
++   /* not thread-safe but is fine */
++   if (!bo->base.mmap_ptr && mappable)
++      bo->base.mmap_ptr = haiku_ioctl_map(gpu, bo->handle, placed_addr);
++
++   return bo->base.mmap_ptr;
++}
++
++static int
++haiku_bo_export_dma_buf(struct vn_renderer *renderer,
++                        struct vn_renderer_bo *bo)
++{
++   return -1;
++}
++
++static bool
++haiku_bo_destroy(struct vn_renderer *renderer, struct vn_renderer_bo *_bo)
++{
++   struct haiku_gpu *gpu = (struct haiku_gpu *)renderer;
++   struct haiku_bo *bo = (struct haiku_bo *)_bo;
++
++   /* Without dma-buf imports nothing can take a new reference meanwhile. */
++   if (vn_refcount_is_valid(&bo->base.refcount))
++      return false;
++
++   if (bo->base.mmap_ptr)
++      haiku_ioctl_unmap(gpu, bo->handle);
++
++   const uint32_t handle = bo->handle;
++   bo->handle = 0;
++   haiku_ioctl_close_handle(gpu, handle);
++
++   return true;
++}
++
++static uint32_t
++haiku_bo_blob_flags(VkMemoryPropertyFlags flags,
++                    VkExternalMemoryHandleTypeFlags external_handles)
++{
++   uint32_t blob_flags = 0;
++   if (flags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT)
++      blob_flags |= VIRTIO_GPU_3D_BLOB_FLAG_USE_MAPPABLE;
++   if (external_handles)
++      blob_flags |= VIRTIO_GPU_3D_BLOB_FLAG_USE_SHAREABLE;
++
++   return blob_flags;
++}
++
++static VkResult
++haiku_bo_create_from_dma_buf(struct vn_renderer *renderer,
++                             VkDeviceSize size,
++                             int fd,
++                             VkMemoryPropertyFlags flags,
++                             struct vn_renderer_bo **out_bo)
++{
++   return VK_ERROR_INVALID_EXTERNAL_HANDLE;
++}
++
++static VkResult
++haiku_bo_create_from_device_memory(
++   struct vn_renderer *renderer,
++   struct vn_renderer_submit_batch *batch,
++   VkDeviceSize size,
++   vn_object_id mem_id,
++   VkMemoryPropertyFlags flags,
++   VkExternalMemoryHandleTypeFlags external_handles,
++   struct vn_renderer_bo **out_bo)
++{
++   struct haiku_gpu *gpu = (struct haiku_gpu *)renderer;
++   const uint32_t blob_flags = haiku_bo_blob_flags(flags, external_handles);
++
++   uint32_t res_id;
++   uint32_t handle = haiku_ioctl_resource_create_blob(
++      gpu, batch, gpu->bo_blob_mem, blob_flags, size, mem_id, &res_id);
++   if (!handle)
++      return VK_ERROR_OUT_OF_DEVICE_MEMORY;
++
++   struct haiku_bo *bo = util_sparse_array_get(&gpu->bo_array, handle);
++   *bo = (struct haiku_bo){
++      .base = {
++         .refcount = VN_REFCOUNT_INIT(1),
++         .res_id = res_id,
++         .mmap_size = size,
++      },
++      .handle = handle,
++      .blob_flags = blob_flags,
++   };
++
++   *out_bo = &bo->base;
++
++   return VK_SUCCESS;
++}
++
++static void
++haiku_shmem_destroy_now(struct vn_renderer *renderer,
++                        struct vn_renderer_shmem *_shmem)
++{
++   struct haiku_gpu *gpu = (struct haiku_gpu *)renderer;
++   struct haiku_shmem *shmem = (struct haiku_shmem *)_shmem;
++
++   haiku_ioctl_unmap(gpu, shmem->handle);
++   haiku_ioctl_close_handle(gpu, shmem->handle);
++}
++
++static void
++haiku_shmem_destroy(struct vn_renderer *renderer,
++                    struct vn_renderer_shmem *shmem)
++{
++   struct haiku_gpu *gpu = (struct haiku_gpu *)renderer;
++
++   if (vn_renderer_shmem_cache_add(&gpu->shmem_cache, shmem))
++      return;
++
++   haiku_shmem_destroy_now(&gpu->base, shmem);
++}
++
++static struct vn_renderer_shmem *
++haiku_shmem_create(struct vn_renderer *renderer, size_t size)
++{
++   struct haiku_gpu *gpu = (struct haiku_gpu *)renderer;
++
++   struct vn_renderer_shmem *cached_shmem =
++      vn_renderer_shmem_cache_get(&gpu->shmem_cache, size);
++   if (cached_shmem) {
++      cached_shmem->refcount = VN_REFCOUNT_INIT(1);
++      return cached_shmem;
++   }
++
++   uint32_t res_id;
++   uint32_t handle = haiku_ioctl_resource_create_blob(
++      gpu, NULL, gpu->shmem_blob_mem, VIRTIO_GPU_3D_BLOB_FLAG_USE_MAPPABLE,
++      size, 0, &res_id);
++   if (!handle)
++      return NULL;
++
++   void *ptr = haiku_ioctl_map(gpu, handle, NULL);
++   if (!ptr) {
++      haiku_ioctl_close_handle(gpu, handle);
++      return NULL;
++   }
++
++   struct haiku_shmem *shmem =
++      util_sparse_array_get(&gpu->shmem_array, handle);
++   *shmem = (struct haiku_shmem){
++      .base = {
++         .refcount = VN_REFCOUNT_INIT(1),
++         .res_id = res_id,
++         .mmap_size = size,
++         .mmap_ptr = ptr,
++      },
++      .handle = handle,
++   };
++
++   return &shmem->base;
++}
++
++static VkResult
++haiku_wait(struct vn_renderer *renderer, const struct vn_renderer_wait *wait)
++{
++   struct haiku_gpu *gpu = (struct haiku_gpu *)renderer;
++
++   uint32_t flags = DRM_SYNCOBJ_WAIT_FLAGS_WAIT_FOR_SUBMIT;
++   if (!wait->wait_any)
++      flags |= DRM_SYNCOBJ_WAIT_FLAGS_WAIT_ALL;
++
++   STACK_ARRAY(uint32_t, syncobj_handles, wait->sync_count);
++
++   for (uint32_t i = 0; i < wait->sync_count; i++)
++      syncobj_handles[i] = wait->syncs[i]->syncobj_handle;
++
++   uint64_t abs_timeout_ns = os_time_get_absolute_timeout(wait->timeout);
++   abs_timeout_ns = MIN2(abs_timeout_ns, (uint64_t)INT64_MAX);
++
++   int ret = gpu->sync->wait(gpu->sync, syncobj_handles, wait->sync_count,
++                             abs_timeout_ns, flags, NULL);
++
++   STACK_ARRAY_FINISH(syncobj_handles);
++
++   if (ret && errno != ETIME)
++      return VK_ERROR_DEVICE_LOST;
++
++   return ret ? VK_TIMEOUT : VK_SUCCESS;
++}
++
++static VkResult
++haiku_submit(struct vn_renderer *renderer,
++             const struct vn_renderer_submit_batch *batch)
++{
++   struct haiku_gpu *gpu = (struct haiku_gpu *)renderer;
++
++   struct virtio_gpu_3d_execbuffer args = {
++      .flags = VIRTIO_GPU_3D_EXECBUF_RING_IDX,
++      .size = batch->cs_size,
++      .command = (uintptr_t)batch->cs_data,
++      .ring_idx = batch->ring_idx,
++   };
++   if (batch->sync_count)
++      args.flags |= VIRTIO_GPU_3D_EXECBUF_FENCE;
++
++   if (ioctl(gpu->fd, VIRTIO_GPU_3D_EXECBUFFER, &args, sizeof(args)))
++      return VK_ERROR_DEVICE_LOST;
++
++   if (!batch->sync_count)
++      return VK_SUCCESS;
++
++   const int fence_fd = haiku_fence_fd(gpu, args.fence_id);
++   if (fence_fd < 0)
++      return VK_ERROR_DEVICE_LOST;
++
++   int ret = 0;
++   for (uint32_t i = 0; i < batch->sync_count; i++) {
++      ret = gpu->sync->import_sync_file(
++         gpu->sync, batch->syncs[i]->syncobj_handle, fence_fd);
++      if (ret)
++         break;
++   }
++   close(fence_fd);
++
++   return ret ? VK_ERROR_DEVICE_LOST : VK_SUCCESS;
++}
++
++static void
++haiku_init_renderer_info(struct haiku_gpu *gpu)
++{
++   struct vn_renderer_info *info = &gpu->base.info;
++
++   /* no DRM nodes or dma-bufs on Haiku */
++   info->drm.props = (VkPhysicalDeviceDrmPropertiesEXT){
++      .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRM_PROPERTIES_EXT,
++   };
++
++   info->pci.vendor_id = 0x1af4;
++   info->pci.device_id = 0x1050;
++
++   info->has_dma_buf_import = false;
++   info->has_external_sync = true;
++   info->has_timeline_sync = false;
++   info->has_implicit_fencing = false;
++
++   const struct virgl_renderer_capset_venus *capset = &gpu->capset.data;
++   info->wire_format_version = capset->wire_format_version;
++   info->vk_xml_version = capset->vk_xml_version;
++   info->vk_ext_command_serialization_spec_version =
++      capset->vk_ext_command_serialization_spec_version;
++   info->vk_mesa_venus_protocol_spec_version =
++      capset->vk_mesa_venus_protocol_spec_version;
++   assert(capset->supports_blob_id_0);
++
++   STATIC_ASSERT(sizeof(info->vk_extension_mask) >=
++                 sizeof(capset->vk_extension_mask1));
++   memcpy(info->vk_extension_mask, capset->vk_extension_mask1,
++          sizeof(capset->vk_extension_mask1));
++
++   assert(capset->allow_vk_wait_syncs);
++
++   assert(capset->supports_multiple_timelines);
++   /* implied by CONTEXT_INIT */
++   info->max_timeline_count = 64;
++
++   if (gpu->bo_blob_mem == VIRTIO_GPU_3D_BLOB_MEM_HOST3D &&
++       capset->use_guest_vram)
++      info->has_guest_vram = true;
++}
++
++static void
++haiku_destroy(struct vn_renderer *renderer,
++              const VkAllocationCallbacks *alloc)
++{
++   struct haiku_gpu *gpu = (struct haiku_gpu *)renderer;
++
++   vn_renderer_shmem_cache_fini(&gpu->shmem_cache);
++
++   if (gpu->sync)
++      gpu->sync->finalize(gpu->sync);
++
++   if (gpu->fd >= 0)
++      close(gpu->fd);
++
++   util_sparse_array_finish(&gpu->shmem_array);
++   util_sparse_array_finish(&gpu->bo_array);
++
++   vk_free(alloc, gpu);
++}
++
++static VkResult
++haiku_init_params(struct haiku_gpu *gpu)
++{
++   const uint64_t required_params[] = {
++      VIRTIO_GPU_3D_PARAM_3D_FEATURES,
++      VIRTIO_GPU_3D_PARAM_CAPSET_QUERY_FIX,
++      VIRTIO_GPU_3D_PARAM_RESOURCE_BLOB,
++      VIRTIO_GPU_3D_PARAM_HOST_VISIBLE,
++      VIRTIO_GPU_3D_PARAM_CONTEXT_INIT,
++   };
++   for (uint32_t i = 0; i < ARRAY_SIZE(required_params); i++) {
++      if (!haiku_ioctl_getparam(gpu, required_params[i])) {
++         if (VN_DEBUG(INIT)) {
++            vn_log(gpu->instance, "required kernel param %d is missing",
++                   (int)required_params[i]);
++         }
++         return VK_ERROR_INITIALIZATION_FAILED;
++      }
++   }
++
++   gpu->bo_blob_mem = VIRTIO_GPU_3D_BLOB_MEM_HOST3D;
++   gpu->blob_alignment = 1;
++   const uint64_t blob_alignment =
++      haiku_ioctl_getparam(gpu, VIRTIO_GPU_3D_PARAM_BLOB_ALIGNMENT);
++   if (util_is_power_of_two_nonzero64(blob_alignment))
++      gpu->blob_alignment = blob_alignment;
++
++   return VK_SUCCESS;
++}
++
++static VkResult
++haiku_init_capset(struct haiku_gpu *gpu)
++{
++   gpu->capset.id = VIRTIO_GPU_3D_CAPSET_VENUS;
++   gpu->capset.version = 0;
++
++   const int ret =
++      haiku_ioctl_get_caps(gpu, gpu->capset.id, gpu->capset.version,
++                           &gpu->capset.data, sizeof(gpu->capset.data));
++   if (ret) {
++      if (VN_DEBUG(INIT)) {
++         vn_log(gpu->instance, "failed to get venus v%d capset: %s",
++                gpu->capset.version, strerror(errno));
++      }
++      return VK_ERROR_INITIALIZATION_FAILED;
++   }
++
++   if (gpu->capset.data.wire_format_version == 0) {
++      if (VN_DEBUG(INIT)) {
++         vn_log(gpu->instance, "Unsupported wire format version %u",
++                gpu->capset.data.wire_format_version);
++      }
++      return VK_ERROR_INITIALIZATION_FAILED;
++   }
++
++   return VK_SUCCESS;
++}
++
++static VkResult
++haiku_init_context(struct haiku_gpu *gpu)
++{
++   if (haiku_ioctl_context_init(gpu, gpu->capset.id)) {
++      if (VN_DEBUG(INIT)) {
++         vn_log(gpu->instance, "failed to initialize context: %s",
++                strerror(errno));
++      }
++      return VK_ERROR_INITIALIZATION_FAILED;
++   }
++
++   return VK_SUCCESS;
++}
++
++static VkResult
++haiku_open(struct haiku_gpu *gpu)
++{
++   for (int i = 0; i < HAIKU_GPU_MAX_NODES; i++) {
++      snprintf(gpu->path, sizeof(gpu->path), "%s/%d",
++               VIRTIO_GPU_RENDER_DEVICE_DIR, i);
++
++      int fd = open(gpu->path, O_RDWR | O_CLOEXEC);
++      if (fd < 0)
++         continue;
++
++      gpu->fd = fd;
++      /* skip 2D-only devices */
++      if (haiku_ioctl_getparam(gpu, VIRTIO_GPU_3D_PARAM_3D_FEATURES)) {
++         if (VN_DEBUG(INIT))
++            vn_log(gpu->instance, "using %s", gpu->path);
++         return VK_SUCCESS;
++      }
++
++      close(fd);
++      gpu->fd = -1;
++   }
++
++   if (VN_DEBUG(INIT))
++      vn_log(gpu->instance, "no virtio_gpu render node with 3D");
++   return VK_ERROR_INITIALIZATION_FAILED;
++}
++
++static VkResult
++haiku_init(struct haiku_gpu *gpu)
++{
++   util_sparse_array_init(&gpu->shmem_array, sizeof(struct haiku_shmem),
++                          1024);
++   util_sparse_array_init(&gpu->bo_array, sizeof(struct haiku_bo), 1024);
++
++   VkResult result = haiku_open(gpu);
++   if (result == VK_SUCCESS)
++      result = haiku_init_params(gpu);
++   if (result == VK_SUCCESS)
++      result = haiku_init_capset(gpu);
++   if (result == VK_SUCCESS)
++      result = haiku_init_context(gpu);
++   if (result != VK_SUCCESS)
++      return result;
++
++   /* host shmem, as in vn_renderer_virtgpu.c */
++   assert(gpu->capset.data.supports_blob_id_0);
++   gpu->shmem_blob_mem = VIRTIO_GPU_3D_BLOB_MEM_HOST3D;
++
++   gpu->sync = vn_renderer_sim_syncobj_get_sync();
++   if (!gpu->sync)
++      return VK_ERROR_OUT_OF_HOST_MEMORY;
++
++   vn_renderer_shmem_cache_init(&gpu->shmem_cache, &gpu->base,
++                                haiku_shmem_destroy_now);
++
++   haiku_init_renderer_info(gpu);
++
++   gpu->base.ops.destroy = haiku_destroy;
++   gpu->base.ops.submit = haiku_submit;
++   gpu->base.ops.wait = haiku_wait;
++
++   gpu->base.shmem_ops.create = haiku_shmem_create;
++   gpu->base.shmem_ops.destroy = haiku_shmem_destroy;
++
++   gpu->base.bo_ops.create_from_device_memory =
++      haiku_bo_create_from_device_memory;
++   gpu->base.bo_ops.create_from_dma_buf = haiku_bo_create_from_dma_buf;
++   gpu->base.bo_ops.destroy = haiku_bo_destroy;
++   gpu->base.bo_ops.export_dma_buf = haiku_bo_export_dma_buf;
++   gpu->base.bo_ops.export_sync_file =
++      vn_renderer_bo_export_sync_file_internal;
++   gpu->base.bo_ops.map = haiku_bo_map;
++   gpu->base.bo_ops.flush = haiku_bo_flush;
++   gpu->base.bo_ops.invalidate = haiku_bo_invalidate;
++
++   gpu->base.sync_ops.create = haiku_sync_create;
++   gpu->base.sync_ops.create_from_syncobj = haiku_sync_create_from_syncobj;
++   gpu->base.sync_ops.destroy = haiku_sync_destroy;
++   gpu->base.sync_ops.export_syncobj = haiku_sync_export_syncobj;
++   gpu->base.sync_ops.reset = haiku_sync_reset;
++   gpu->base.sync_ops.read = haiku_sync_read;
++   gpu->base.sync_ops.write = haiku_sync_write;
++
++   return VK_SUCCESS;
++}
++
++VkResult
++vn_renderer_create_virtgpu(struct vn_instance *instance,
++                           const VkAllocationCallbacks *alloc,
++                           struct vn_renderer **renderer)
++{
++   struct haiku_gpu *gpu = vk_zalloc(alloc, sizeof(*gpu), VN_DEFAULT_ALIGN,
++                                     VK_SYSTEM_ALLOCATION_SCOPE_INSTANCE);
++   if (!gpu)
++      return VK_ERROR_OUT_OF_HOST_MEMORY;
++
++   gpu->instance = instance;
++   gpu->fd = -1;
++
++   VkResult result = haiku_init(gpu);
++   if (result != VK_SUCCESS) {
++      haiku_destroy(&gpu->base, alloc);
++      return result;
++   }
++
++   *renderer = &gpu->base;
++
++   if (VN_DEBUG(INIT))
++      vn_log(gpu->instance, "haiku virtio_gpu backend initialized");
++
++   return VK_SUCCESS;
++}
