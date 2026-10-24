@@ -11,7 +11,7 @@ virglrenderer is built with Venus. Everything missing is on the Haiku side.
 |---|---|---|
 | 1 | Haiku `virtio_gpu` kernel driver: 3D contexts, host-visible blobs, fences | done |
 | 2 | Mesa's Venus Vulkan driver built for Haiku | done |
-| 3 | Chromium WebGL through ANGLE's Vulkan backend on Venus | WebGL 2 works (ANGLE fix + KosmicKrisp fix); launcher default pending |
+| 3 | Chromium WebGL through ANGLE's Vulkan backend on Venus | done: WebGL 2 on the host GPU (ANGLE fix + KosmicKrisp fix) |
 | 4 | GPU compositing and rasterization | |
 
 ## Phase 1: kernel driver
@@ -221,6 +221,6 @@ Aquarium runs 500 fish at 25 fps in the 1024x1024 canvas with no GPU errors
 (`webgl2-venus-kosmickrisp.png`, `webgl-aquarium-venus-kosmickrisp.png`).
 With MoltenVK (no KosmicKrisp patch needed) the same path gives WebGL 1 only.
 
-Still to do for Phase 3: ship `~/venus-lib` as the launcher's default
-(`--use-angle=vulkan`, SwiftShader kept as fallback), and get the KosmicKrisp
-fix upstream so stock UTM works.
+The launcher (`vm/HaikuChrome`) now runs ANGLE on Venus by default, with
+SwiftShader kept as a fallback (`HAIKUCHROME_SWIFTSHADER=1`). Still to do:
+get the KosmicKrisp fix upstream so stock UTM works.

@@ -2,9 +2,17 @@
 # Launcher for the full //chrome build (not R Chromium's content_shell).
 self="$(readlink -f "$0" 2>/dev/null || echo "$0")"
 cd "$(dirname "$self")" || exit 1
-# lib/ holds the BeAPI shim and SwiftShader's Vulkan driver as libvulkan.so.1,
-# which ANGLE dlopens (through volk) for WebGL.
-LIBRARY_PATH="%A/lib:$LIBRARY_PATH"
+# lib/ holds the BeAPI shim and SwiftShader's Vulkan driver as libvulkan.so.1; venus/
+# holds the Vulkan loader stand-in and Mesa's Venus driver, which forward Vulkan to
+# the host GPU through virtio-gpu. ANGLE dlopens libvulkan.so.1 (through volk)
+# for WebGL. HAIKUCHROME_SWIFTSHADER=1 falls back to software rendering.
+if [ -n "$HAIKUCHROME_SWIFTSHADER" ]; then
+	LIBRARY_PATH="%A/lib:$LIBRARY_PATH"
+	angle="--use-angle=swiftshader --enable-unsafe-swiftshader"
+else
+	LIBRARY_PATH="%A/venus:%A/lib:$LIBRARY_PATH"
+	angle="--use-angle=vulkan"
+fi
 export LIBRARY_PATH
 # Deskbar shows a running app with its executable's icon. A deploy from Linux
 # drops BFS attributes, so put the icon back when it's missing.
@@ -20,7 +28,7 @@ fi
 ulimit -n 8192 2>/dev/null
 exec ./Chromium --ozone-platform=haiku --no-sandbox --single-process \
 	--in-process-gpu --disable-gpu-compositing \
-	--use-angle=swiftshader --enable-unsafe-swiftshader \
+	$angle \
 	--use-fake-device-for-media-stream \
 	--user-data-dir=/boot/home/config/settings/HaikuChrome \
 	$dark "$@"

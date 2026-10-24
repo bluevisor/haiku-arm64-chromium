@@ -296,19 +296,24 @@ backgrounds the whole `&&` list, so tar reads `/dev/null` and fails with
 ## 9. Launcher and Deskbar entry
 
 `vm/HaikuChrome` goes into `/boot/home/HaikuChrome/`. It sets
-`LIBRARY_PATH=%A/lib`, so the shim and `libvulkan.so.1` resolve, and runs:
+`LIBRARY_PATH=%A/venus:%A/lib`, so the shim and `libvulkan.so.1` resolve
+(`venus/` first: the Vulkan loader stand-in and Mesa's Venus driver from
+`gpu/`, which forward Vulkan to the host GPU), and runs:
 
 ```
 ./Chromium --ozone-platform=haiku --no-sandbox --single-process \
   --in-process-gpu --disable-gpu-compositing \
-  --use-angle=swiftshader --enable-unsafe-swiftshader \
+  --use-angle=vulkan \
   --use-fake-device-for-media-stream \
   --user-data-dir=/boot/home/config/settings/HaikuChrome [--force-dark-mode]
 ```
 
-The GPU thread runs ANGLE on SwiftShader, and the display compositor stays in
-software, so WebGL frames are read back into the window's bitmap. Replace the
-ANGLE flags with `--disable-gpu` to turn WebGL off.
+The GPU thread runs ANGLE on Venus (WebGL on the Mac's GPU, see
+`gpu/README.md`; with `HAIKUCHROME_SWIFTSHADER=1` it uses `lib/`'s
+SwiftShader and `--use-angle=swiftshader --enable-unsafe-swiftshader`
+instead), and the display compositor stays in software, so WebGL frames are
+read back into the window's bitmap. Replace the ANGLE flags with
+`--disable-gpu` to turn WebGL off.
 
 `--force-dark-mode` is added when `ui_is_dark` reports that Haiku's panel
 color is dark. Build it on the VM with `g++ ui_is_dark.cpp -o ui_is_dark -lbe`.
