@@ -1,0 +1,164 @@
+diff --git a/src/egl/drivers/haiku/egl_haiku.cpp b/src/egl/drivers/haiku/egl_haiku.cpp
+index f2f75c0..712f981 100644
+--- a/src/egl/drivers/haiku/egl_haiku.cpp
++++ b/src/egl/drivers/haiku/egl_haiku.cpp
+@@ -42,6 +42,10 @@
+ 
+ #include "pipe/p_context.h"
+ #include "pipe/p_defines.h"
++#include "util/u_inlines.h"
++#include "util/u_debug.h"
++
++#include <string.h>
+ #include "state_tracker/st_context.h"
+ #include "util/u_atomic.h"
+ #include "mesa/glapi/glapi/glapi.h"
+@@ -69,6 +73,9 @@ _EGL_DRIVER_STANDARD_TYPECASTS(haiku_egl)
+ struct haiku_egl_display {
+    int ref_count;
+    struct hgl_display *disp;
++   /* The driver renders into its own memory (zink on Vulkan) instead of the
++    * winsys BBitmaps, so finished frames are read back on swap. */
++   bool readback;
+ };
+ 
+ struct haiku_egl_config {
+@@ -84,6 +91,10 @@ struct haiku_egl_surface {
+    _EGLSurface base;
+    struct hgl_buffer *fb;
+    struct pipe_fence_handle *throttle_fence;
++   /* readback mode: two bitmaps we own, alternated so the view can draw one
++    * while the next frame is copied into the other */
++   BBitmap *readback_bitmaps[2];
++   int readback_next;
+ };
+ 
+ // #pragma mark EGLSurface
+@@ -179,6 +190,8 @@ haiku_destroy_surface(_EGLDisplay *disp, _EGLSurface *surf)
+       BitmapHook *bitmapHook = (BitmapHook*)hgl_surf->fb->winsysContext;
+       if (bitmapHook != NULL)
+          bitmapHook->SetBitmap(NULL);
++      for (int i = 0; i < 2; i++)
++         delete hgl_surf->readback_bitmaps[i];
+ 
+       hgl_destroy_st_framebuffer(hgl_surf->fb);
+       free(surf);
+@@ -198,6 +211,52 @@ update_size(struct hgl_buffer *buffer)
+    }
+ }
+ 
++static void
++haiku_readback(struct haiku_egl_surface *hgl_surf, struct pipe_context *pipe,
++               struct pipe_resource *res)
++{
++   BitmapHook *hook = (BitmapHook *)hgl_surf->fb->winsysContext;
++   if (hook == NULL || res == NULL)
++      return;
++
++   unsigned width = res->width0, height = res->height0;
++   BBitmap *&bitmap = hgl_surf->readback_bitmaps[hgl_surf->readback_next];
++   if (bitmap != NULL && (bitmap->Bounds().IntegerWidth() + 1 != (int32)width ||
++                          bitmap->Bounds().IntegerHeight() + 1 != (int32)height)) {
++      /* never delete the bitmap the view is showing */
++      BBitmap *shown = hook->SetBitmap(NULL);
++      if (shown != bitmap)
++         hook->SetBitmap(shown);
++      delete bitmap;
++      bitmap = NULL;
++   }
++   if (bitmap == NULL) {
++      bitmap = new BBitmap(BRect(0, 0, width - 1, height - 1), 0, B_RGBA32);
++      if (bitmap->InitCheck() != B_OK) {
++         delete bitmap;
++         bitmap = NULL;
++         return;
++      }
++   }
++
++   struct pipe_transfer *transfer = NULL;
++   const uint8_t *src = (const uint8_t *)pipe_texture_map(
++      pipe, res, 0, 0, PIPE_MAP_READ, 0, 0, width, height, &transfer);
++   if (src == NULL)
++      return;
++
++   uint8_t *dst = (uint8_t *)bitmap->Bits();
++   size_t dstStride = bitmap->BytesPerRow();
++   size_t rowBytes = width * 4;
++   for (unsigned y = 0; y < height; y++)
++      memcpy(dst + y * dstStride, src + y * transfer->stride, rowBytes);
++   pipe_texture_unmap(pipe, transfer);
++
++   /* the view hands back the previous bitmap, which we still own */
++   hook->SetBitmap(bitmap);
++   hgl_surf->readback_next ^= 1;
++}
++
+ static EGLBoolean
+ haiku_swap_buffers(_EGLDisplay *disp, _EGLSurface *surf)
+ {
+@@ -231,8 +290,11 @@ haiku_swap_buffers(_EGLDisplay *disp, _EGLSurface *surf)
+ 
+    // flush back buffer and swap buffers if double buffering is used
+    if (backBuffer != NULL) {
+-      screen->flush_frontbuffer(screen, st->pipe, backBuffer, 0, 0,
+-                                buffer->winsysContext, 1, NULL);
++      if (hgl_dpy->readback)
++         haiku_readback(hgl_surf, st->pipe, backBuffer);
++      else
++         screen->flush_frontbuffer(screen, st->pipe, backBuffer, 0, 0,
++                                   buffer->winsysContext, 1, NULL);
+       std::swap(frontBuffer, backBuffer);
+       p_atomic_inc(&buffer->base.stamp);
+    }
+@@ -343,7 +405,22 @@ haiku_initialize_impl(_EGLDisplay *disp, void *platformDisplay)
+    disp->DriverData = (void *)hgl_dpy;
+ 
+    struct sw_winsys *winsys = hgl_create_sw_winsys();
+-   struct pipe_screen *screen = sw_screen_create(winsys);
++   struct pipe_screen *screen = NULL;
++   /* Prefer the GPU (zink on the virtio-gpu Venus Vulkan driver) unless a
++    * driver is forced; fall back to the software rasterizers. */
++   if (debug_get_option("GALLIUM_DRIVER", NULL) == NULL &&
++       !debug_get_bool_option("LIBGL_ALWAYS_SOFTWARE", false))
++      screen = sw_screen_create_named(winsys, "zink");
++   if (screen == NULL)
++      screen = sw_screen_create(winsys);
++   if (screen == NULL) {
++      free(hgl_dpy);
++      disp->DriverData = NULL;
++      return _eglError(EGL_NOT_INITIALIZED, "eglInitialize: no gallium driver");
++   }
++   const char *name = screen->get_name(screen);
++   hgl_dpy->readback = name != NULL && strncmp(name, "softpipe", 8) != 0 &&
++                       strncmp(name, "llvmpipe", 8) != 0;
+    hgl_dpy->disp = hgl_create_display(screen);
+ 
+    disp->ClientAPIs = 0;
+diff --git a/src/egl/meson.build b/src/egl/meson.build
+index 4e62ee4..f9af81a 100644
+--- a/src/egl/meson.build
++++ b/src/egl/meson.build
+@@ -148,7 +148,7 @@ elif with_platform_haiku
+   incs_for_egl += [include_directories('../gallium/frontends/hgl')]
+ 
+   link_for_egl += [libmesa, libgallium, libswhgl, libsthgl, libglapi]
+-  deps_for_egl += [cpp.find_library('be'), driver_swrast]
++  deps_for_egl += [cpp.find_library('be'), driver_swrast, driver_zink, idep_xmlconfig]
+ elif with_platform_windows
+   c_args_for_egl += [
+     '-DEGLAPI=', '-DPUBLIC='
+diff --git a/src/gallium/auxiliary/target-helpers/inline_sw_helper.h b/src/gallium/auxiliary/target-helpers/inline_sw_helper.h
+index ddb67b3..1937459 100644
+--- a/src/gallium/auxiliary/target-helpers/inline_sw_helper.h
++++ b/src/gallium/auxiliary/target-helpers/inline_sw_helper.h
+@@ -29,6 +29,10 @@
+ #include "d3d12/d3d12_public.h"
+ #endif
+ 
++#ifdef GALLIUM_ZINK
++#include "zink/zink_public.h"
++#endif
++
+ static inline struct pipe_screen *
+ sw_screen_create_named(struct sw_winsys *winsys, const char *driver)
+ {

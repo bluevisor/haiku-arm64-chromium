@@ -38,11 +38,48 @@ negotiate(void)
    vk_icdNegotiateLoaderICDInterfaceVersion(&version);
 }
 
+/* The ICD only hands out vkGetDeviceProcAddr for a live instance, but
+ * loaders export it directly (zink dlsym()s it before creating one), so
+ * remember the last instance created through us and resolve it lazily. */
+static VkInstance last_instance;
+static PFN_vkCreateInstance icd_create_instance;
+
+static VKAPI_ATTR VkResult VKAPI_CALL
+create_instance(const VkInstanceCreateInfo *info,
+                const VkAllocationCallbacks *alloc, VkInstance *instance)
+{
+   VkResult result = icd_create_instance(info, alloc, instance);
+   if (result == VK_SUCCESS)
+      __atomic_store_n(&last_instance, *instance, __ATOMIC_RELEASE);
+   return result;
+}
+
+VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL
+vkGetDeviceProcAddr(VkDevice device, const char *name)
+{
+   static PFN_vkGetDeviceProcAddr icd_get_device_proc_addr;
+   if (icd_get_device_proc_addr == NULL) {
+      VkInstance instance = __atomic_load_n(&last_instance, __ATOMIC_ACQUIRE);
+      if (instance == NULL)
+         return NULL;
+      icd_get_device_proc_addr = (PFN_vkGetDeviceProcAddr)
+         vk_icdGetInstanceProcAddr(instance, "vkGetDeviceProcAddr");
+      if (icd_get_device_proc_addr == NULL)
+         return NULL;
+   }
+   return icd_get_device_proc_addr(device, name);
+}
+
 VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL
 vkGetInstanceProcAddr(VkInstance instance, const char *name)
 {
    if (strcmp(name, "vkGetInstanceProcAddr") == 0)
       return (PFN_vkVoidFunction)vkGetInstanceProcAddr;
+   if (strcmp(name, "vkCreateInstance") == 0) {
+      icd_create_instance = (PFN_vkCreateInstance)
+         vk_icdGetInstanceProcAddr(NULL, "vkCreateInstance");
+      return icd_create_instance ? (PFN_vkVoidFunction)create_instance : NULL;
+   }
    if (strcmp(name, "vkEnumerateInstanceLayerProperties") == 0)
       return (PFN_vkVoidFunction)enumerate_instance_layers;
    if (strcmp(name, "vkEnumerateDeviceLayerProperties") == 0)

@@ -1108,7 +1108,7 @@ index 20d17dbc..8702463b 100644
  static status_t
  virtio_gpu_read(void* cookie, off_t pos, void* buffer, size_t* _length)
  {
-@@ -765,38 +1293,877 @@ virtio_gpu_ioctl(void* cookie, uint32 op, void* buffer, size_t length)
+@@ -765,38 +1293,881 @@ virtio_gpu_ioctl(void* cookie, uint32 op, void* buffer, size_t length)
  }
  
  
@@ -1602,9 +1602,13 @@ index 20d17dbc..8702463b 100644
 +			break;
 +	}
 +
++	// B_SHARED_AREA: fork() copies every other area copy-on-write, which
++	// would detach the parent from the host memory (the Venus ring stalls)
++	// and leave device pages in a private cache (the kernel hangs on exit).
 +	void* address = NULL;
 +	area_id area = vm_map_physical_memory(team, "virtio_gpu blob", &address,
-+		B_ANY_ADDRESS | memoryType, blob->size, B_READ_AREA | B_WRITE_AREA,
++		B_ANY_ADDRESS | memoryType, blob->size,
++		B_READ_AREA | B_WRITE_AREA | B_SHARED_AREA,
 +		info->hostmemBase + blob->hostOffset, false);
 +	if (area < 0)
 +		return area;

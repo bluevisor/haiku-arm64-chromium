@@ -14,6 +14,7 @@ virglrenderer is built with Venus. Everything missing is on the Haiku side.
 | 3 | Chromium WebGL through ANGLE's Vulkan backend on Venus | done: WebGL 2 on the host GPU (ANGLE fix + KosmicKrisp fix) |
 | 4 | GPU compositing and rasterization | done: readback view surface, on by default |
 | 5 | Sound | done: HDA driver + media kit for arm64, BSoundPlayer behind the shim |
+| 6 | Native OpenGL (BGLView apps, GLTeapot) on the host GPU | done: zink on Venus, readback into the view |
 
 ## Phase 1: kernel driver
 
@@ -43,6 +44,15 @@ virglrenderer is built with Venus. Everything missing is on the Haiku side.
 Blob mappings use write-back memory. The default memory type for physical
 mappings on arm64 is Device-nGnRnE, which faults on the unaligned accesses
 `memcpy()` makes.
+
+Blob mappings are also `B_SHARED_AREA`. Without it, `fork()` in a Vulkan
+process makes them copy-on-write (Haiku's `vm_copy_area()` does that to every
+area that isn't shared): the parent's later writes to the Venus ring land in
+private pages the host never sees, so the next command stalls and Venus
+aborts in `vn_relax()`, and tearing the team down then hung the whole VM. This
+was found with Temino, a terminal that forked its shell after initializing
+Vulkan (2026-10-24). Fixed in the driver built for hrev60295: `vkforktest.c`
+(vkclear, then `fork()` + child exit, then another submit) passes on the VM.
 
 Install it as a user add-on, so that the stock driver stays in place and the
 boot menu's "Disable user add-ons" falls back to it:
@@ -90,7 +100,10 @@ ninja -C build-venus     # src/virtio/vulkan/libvulkan_virtio.so
 
 Haiku has no Vulkan loader. `vulkan_shim.c` builds a `libvulkan.so.1` that
 exposes the ICD's `vk_icdGetInstanceProcAddr` as `vkGetInstanceProcAddr`
-(all ANGLE's volk needs) and reports no layers:
+(all ANGLE's volk needs) and reports no layers. It also exports
+`vkGetDeviceProcAddr`, which zink `dlsym()`s before it has an instance; the
+shim resolves it lazily through the last instance created via its
+`vkCreateInstance` wrapper:
 
 ```sh
 gcc -shared -fPIC -I<mesa>/include -Wl,-soname,libvulkan.so.1 \
@@ -333,3 +346,40 @@ that went away; the real fault was the stall.
 
 `sound-probe.html` plays a WebAudio tone and an `<audio>` WAV and logs
 `currentTime`, which only advances once the whole chain pulls.
+
+## Phase 6: native OpenGL on the GPU
+
+The VM ships no OpenGL at all. The OpenGL kit (`BGLView`, `libGL.so`) comes
+from libglvnd 1.7.0 with the HaikuPorts patchset (plus
+`PTHREAD_RECURSIVE_MUTEX_INITIALIZER` → `..._NP` for current Haiku), and Mesa
+supplies the EGL vendor `libEGL_mesa.so.0` in `add-ons/opengl/egl_vendor.d`.
+Both are built natively on the VM into `~/config/non-packaged`. Mesa's
+`build-gl`: `-Degl=enabled -Dglvnd=enabled -Dglx=disabled -Dplatforms=haiku
+-Dgallium-drivers=softpipe,zink -Dvulkan-drivers= -Dllvm=disabled` (no LLVM
+for arm64, so the CPU fallback is softpipe). The repo's bootstrap `bison` is a
+Linux x86-64 binary, so bison 3.8.2 was built from source first.
+
+`mesa-26.2.5-haiku-zink-gl.diff` makes the Haiku EGL driver use zink:
+
+- link `driver_zink` and `idep_xmlconfig` into `libEGL_mesa` (the Haiku branch
+  only linked the software rasterizers, so `GALLIUM_DRIVER=zink` silently fell
+  through) and include `zink_public.h` in `inline_sw_helper.h`, which called
+  `zink_create_screen` without a declaration;
+- try zink first unless `GALLIUM_DRIVER` or `LIBGL_ALWAYS_SOFTWARE` is set,
+  fall back to softpipe, and fail `eglInitialize` cleanly instead of
+  dereferencing a NULL screen;
+- zink only presents through Vulkan swapchains (kopper) and ignores the sw
+  winsys, so its `flush_frontbuffer` is a no-op here. On swap the driver maps
+  the back buffer (`pipe_texture_map`, read) into one of two `B_RGBA32`
+  bitmaps it owns and hands it to the view's `BitmapHook`.
+
+Result, GLTeapot in its default window on UTM 5.0.8 / M5 Pro:
+
+| Renderer | FPS |
+|---|---|
+| softpipe (CPU) | ~450 |
+| zink → Venus → KosmicKrisp (host GPU) | ~1060 |
+
+`glGetString(GL_RENDERER)` = `zink Vulkan 1.4(Virtio-GPU Venus (Apple M5 Pro)
+(MESA_KOSMICKRISP))`, OpenGL 2.1: the host lacks
+`VK_EXT_custom_border_color` and `rectangularLines`, which caps zink there.
