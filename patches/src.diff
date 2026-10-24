@@ -10446,6 +10446,18 @@ index 4e9e524699..60edbf57fa 100644
      sources += [
        "service_worker/service_worker_usb_delegate_observer.cc",
        "service_worker/service_worker_usb_delegate_observer.h",
+diff --git a/content/browser/browser_main_loop.cc b/content/browser/browser_main_loop.cc
+index 90d60c44cc..c4a484f8ee 100644
+--- a/content/browser/browser_main_loop.cc
++++ b/content/browser/browser_main_loop.cc
+@@ -579,6 +579,7 @@ int BrowserMainLoop::EarlyInitialization() {
+   base::PlatformThread::SetDefaultThreadType(base::ThreadType::kPresentation);
+ 
+ #if BUILDFLAG(IS_APPLE) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || \
++    BUILDFLAG(IS_HAIKU) || \
+     BUILDFLAG(IS_ANDROID)
+   // We use quite a few file descriptors for our IPC as well as disk the disk
+   // cache, and the default limit on Apple is low (256), so bump it up.
 diff --git a/content/browser/video_capture_service_impl.cc b/content/browser/video_capture_service_impl.cc
 index 3b99b1ec35..8a589dbd02 100644
 --- a/content/browser/video_capture_service_impl.cc

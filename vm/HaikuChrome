@@ -15,6 +15,9 @@ dark=
 if ./ui_is_dark 2>/dev/null; then
 	dark="--force-dark-mode"
 fi
+# Haiku gives each team 256 fds by default; Chrome only raises its own limit
+# on Apple/Linux/Android, and single-process mode needs far more.
+ulimit -n 8192 2>/dev/null
 exec ./Chromium --ozone-platform=haiku --no-sandbox --single-process \
 	--in-process-gpu --disable-gpu-compositing \
 	--use-angle=swiftshader --enable-unsafe-swiftshader \
