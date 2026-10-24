@@ -12356,6 +12356,28 @@ index 8a1728815f..f72c2c171f 100644
  inline constexpr char kMimeTypeSourceUrl[] = "chromium/x-source-url";
  #endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) ||
          // BUILDFLAG(IS_FUCHSIA) || BUILDFLAG(IS_ANDROID)
+diff --git a/ui/base/clipboard/clipboard_non_backed.cc b/ui/base/clipboard/clipboard_non_backed.cc
+index 88f80571b0..fd86e825ae 100644
+--- a/ui/base/clipboard/clipboard_non_backed.cc
++++ b/ui/base/clipboard/clipboard_non_backed.cc
+@@ -952,10 +952,14 @@ void ClipboardNonBacked::ReadData(
+ 
+ #if BUILDFLAG(IS_OZONE)
+ bool ClipboardNonBacked::IsSelectionBufferAvailable() const {
+-#if BUILDFLAG(IS_CHROMEOS)
+-  return false;
+-#else
++  // Must match the buffers the constructor creates: reporting a selection
++  // buffer that does not exist makes ClipboardDataBuilder::CommitToClipboard
++  // CHECK on the first write to it (e.g. the omnibox updating the selection
++  // clipboard after unelision).
++#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_FUCHSIA)
+   return true;
++#else
++  return false;
+ #endif
+ }
+ #endif  // BUILDFLAG(IS_OZONE)
 diff --git a/ui/base/dragdrop/os_exchange_data_provider_factory.cc b/ui/base/dragdrop/os_exchange_data_provider_factory.cc
 index 4f3f3f5398..38845cd739 100644
 --- a/ui/base/dragdrop/os_exchange_data_provider_factory.cc
