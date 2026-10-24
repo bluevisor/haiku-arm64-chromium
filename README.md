@@ -307,7 +307,7 @@ backgrounds the whole `&&` list, so tar reads `/dev/null` and fails with
 
 ```
 ./Chromium --ozone-platform=haiku --no-sandbox --single-process \
-  --in-process-gpu --disable-gpu-compositing \
+  --in-process-gpu \
   --use-angle=vulkan \
   --use-fake-device-for-media-stream \
   --user-data-dir=/boot/home/config/settings/HaikuChrome [--force-dark-mode]
@@ -317,9 +317,10 @@ The GPU thread runs ANGLE on Venus (WebGL on the Mac's GPU, see
 `gpu/README.md`; with `HAIKUCHROME_SWIFTSHADER=1` it uses `lib/`'s
 SwiftShader and `--use-angle=swiftshader --enable-unsafe-swiftshader`
 instead), and the display compositor stays in software, so WebGL frames are
-read back into the window's bitmap. `HAIKUCHROME_GPU_COMPOSITING=1` drops
-`--disable-gpu-compositing`: viz then renders every frame on the GPU through
-the readback view surface (`gpu/README.md`, Phase 4). Replace the ANGLE
+read back into the window's bitmap. viz renders every frame on the GPU through
+the readback view surface (`gpu/README.md`, Phase 4);
+`HAIKUCHROME_SOFTWARE_COMPOSITING=1` adds `--disable-gpu-compositing` to go
+back to compositing in software. Replace the ANGLE
 flags with `--disable-gpu` to turn WebGL off.
 
 `--force-dark-mode` is added when `ui_is_dark` reports that Haiku's panel

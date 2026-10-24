@@ -12,7 +12,7 @@ virglrenderer is built with Venus. Everything missing is on the Haiku side.
 | 1 | Haiku `virtio_gpu` kernel driver: 3D contexts, host-visible blobs, fences | done |
 | 2 | Mesa's Venus Vulkan driver built for Haiku | done |
 | 3 | Chromium WebGL through ANGLE's Vulkan backend on Venus | done: WebGL 2 on the host GPU (ANGLE fix + KosmicKrisp fix) |
-| 4 | GPU compositing and rasterization | works (opt-in `HAIKUCHROME_GPU_COMPOSITING=1`): readback view surface |
+| 4 | GPU compositing and rasterization | done: readback view surface, on by default |
 
 ## Phase 1: kernel driver
 
@@ -248,8 +248,8 @@ they go to the BWindow the way the software compositor's bitmaps did.
   `gl::init::CreateViewGLSurface()` like Linux. (Finding that took a
   `--v=1` run: the only trace is `viz_process_transport_factory.cc
   "Switching to software compositing"`.)
-- The launcher keeps `--disable-gpu-compositing` unless
-  `HAIKUCHROME_GPU_COMPOSITING=1` is set, until this has soaked.
+- The launcher runs with GPU compositing by default;
+  `HAIKUCHROME_SOFTWARE_COMPOSITING=1` restores `--disable-gpu-compositing`.
 
 Measured: WebGL Aquarium 500 fish at 22 fps with the whole 1800x1090 window
 read back per frame (25 fps when only the canvas was read back under software

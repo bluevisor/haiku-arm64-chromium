@@ -14,10 +14,11 @@ else
 	angle="--use-angle=vulkan"
 fi
 # GPU compositing (Phase 4): viz renders every frame on the GPU through a
-# readback surface. Opt-in while it is being proven.
-comp="--disable-gpu-compositing"
-if [ -n "$HAIKUCHROME_GPU_COMPOSITING" ]; then
-	comp=
+# readback surface. HAIKUCHROME_SOFTWARE_COMPOSITING=1 goes back to
+# compositing in software (WebGL still on the GPU).
+comp=
+if [ -n "$HAIKUCHROME_SOFTWARE_COMPOSITING" ]; then
+	comp="--disable-gpu-compositing"
 fi
 export LIBRARY_PATH
 # Deskbar shows a running app with its executable's icon. A deploy from Linux
