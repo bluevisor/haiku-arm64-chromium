@@ -1,0 +1,4 @@
+#!/bin/sh
+# Deskbar shows a menu entry with its target's name and icon, so the entry
+# needs a real file called Chromium: this hands off to the launcher.
+cd /boot/home/HaikuChrome && exec ./HaikuChrome "$@"
