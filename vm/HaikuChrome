@@ -26,9 +26,12 @@ fi
 # Haiku gives each team 256 fds by default; Chrome only raises its own limit
 # on Apple/Linux/Android, and single-process mode needs far more.
 ulimit -n 8192 2>/dev/null
-exec ./Chromium --ozone-platform=haiku --no-sandbox --single-process \
+# Crashes are caught by Chromium's own handler, so keep the last run's stderr
+# (a "Received signal" trace ends it) where a Deskbar launch would lose it.
+log=/boot/home/config/settings/HaikuChrome/chromium.log
+exec ./Chromium --enable-logging=stderr --ozone-platform=haiku --no-sandbox --single-process \
 	--in-process-gpu --disable-gpu-compositing \
 	$angle \
 	--use-fake-device-for-media-stream \
 	--user-data-dir=/boot/home/config/settings/HaikuChrome \
-	$dark "$@"
+	$dark "$@" 2> "$log"
