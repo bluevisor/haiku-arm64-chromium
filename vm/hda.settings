@@ -1,0 +1,4 @@
+# ~/config/settings/kernel/drivers/hda.settings (also /boot/system/settings/kernel/drivers/)
+# Bigger DMA buffers for the emulated intel-hda in UTM/QEMU.
+play_buffer_frames 4096
+play_buffer_count 4

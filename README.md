@@ -325,6 +325,13 @@ driver plus the media kit built for arm64 and installed under
 `~/config/non-packaged` (started by `vm/UserBootscript`), and a
 `BSoundPlayer`-backed `AudioManagerHaiku` through the shim.
 
+Popping under QEMU came from the hda driver picking 96 kHz (QEMU's codec
+advertises it), so everything was resampled twice. `patches/haiku-hda-48khz.diff`
+caps the driver at 48 kHz, `vm/hda.settings` (both `~/config/settings/kernel/drivers/`
+and `/boot/system/settings/kernel/drivers/`) gives it 4 × 4096-frame DMA buffers,
+and `defaults write com.utmapp.UTM QEMUSoundBackend -int 2` makes QEMU
+talk to CoreAudio directly instead of through SPICE.
+
 ## 9. Launcher and Deskbar entry
 
 `vm/HaikuChrome` goes into `/boot/home/HaikuChrome/`. It sets

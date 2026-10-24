@@ -307,6 +307,20 @@ was `FakeAudioManager`.
   the media kit callback only drains it. Before the pump, every late renderer
   reply (video decode is on the CPU) became a gap of silence: popping on
   YouTube. Underruns are counted and logged (`Haiku audio underrun`).
+- **Driver and host side:** with 0 underruns the pops stayed, and a native
+  `BSoundPlayer` sine popped too, so the fault was below Chromium. QEMU's
+  codec advertises up to 96 kHz, the `hda` driver takes the highest rate, the
+  mixer resamples 48 → 96 k and QEMU's mixeng resamples 96 → 48 k back, each
+  hop with its own timing slop. `patches/haiku-hda-48khz.diff` masks the
+  rates above 48 kHz out of the codec's capabilities (the driver has no
+  settings key for it), `vm/hda.settings` asks for 4 × 4096-frame DMA
+  buffers (`play_buffer_frames`/`play_buffer_count`), and the host switched
+  QEMU's audiodev from SPICE to CoreAudio (`defaults write com.utmapp.UTM
+  QEMUSoundBackend -int 2`, a global UTM pref; QEMU then gets
+  `-audiodev coreaudio,id=audio1` and `hda-output,audiodev=audio1`). The
+  three went in together; the tone was clean afterwards. The driver change is
+  a workaround: the real fix would be a rate preference in the mixer or in
+  `hda.settings`.
 
 Two things cost time. `BSoundPlayer::Latency()` must not be called from the
 fill callback: it is a `BMediaRoster` round trip to the player's own node,
