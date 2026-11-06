@@ -34,7 +34,7 @@ This repo holds everything referenced below:
 |---|---|
 | `patches/` | The complete source delta from upstream 154.0.8036.0, port included: one `.diff` and one `.new-files.tar.gz` per repo (src plus 15 DEPS sub-repos such as v8, angle, perfetto and swiftshader). `REPOS.txt` lists each repo with its base commit. |
 | `tools/` | `haikuize.py`, `gn_haikuize.py`, `cond.py` (porting helpers), `aarch64-unknown-haiku.json` (Rust target) |
-| `vm/` | The `HaikuChrome` launcher, `ui_is_dark.cpp`, `hshot.cpp` (screenshots), `typepost.cpp` (type into a window over ssh), `hstack.cpp` (live stack dumps), `webgl-probe.html` (WebGL 1/2 check) |
+| `vm/` | The `HaikuChrome` launcher, `appflags.cpp` (lets the launcher take opened files as arguments), `ui_is_dark.cpp`, `hshot.cpp` (screenshots), `typepost.cpp` (type into a window over ssh), `hstack.cpp` (live stack dumps), `webgl-probe.html` (WebGL 1/2 check) |
 
 ## Overview
 
@@ -46,7 +46,7 @@ This repo holds everything referenced below:
 6. Build the BeAPI shim (`libchromium_haiku.so`) with Haiku's gcc.
 7. Run `gn gen` with the args below, then `ninja chrome`. That's about 60k steps, roughly 8 h at -j14.
 8. Strip the binary, add the license files, and copy everything to the VM.
-9. Add the launcher and the Deskbar entry.
+9. Add the launcher and the Deskbar entry, and make Chromium the default browser.
 
 The VM needs the `haiku_rchromium_fixes` system package from
 [haiku-arm64-bootstrap: chromium.md §1](https://github.com/bluevisor/haiku-arm64-bootstrap/blob/main/docs/chromium.md#1-the-system-fixes-haiku_rchromium_fixes):
@@ -374,6 +374,28 @@ M=/boot/home/config/non-packaged/data/deskbar/menu/Applications
 mkdir -p $M && ln -sfn $A/Chromium $M/Chromium
 ```
 
+Make Chromium the browser that links open in. Haiku sends `http`, `https`
+and `text/html` to WebPositive, which the arm64 image doesn't have, so
+`open https://…` (and a link clicked in a terminal, or an app's OAuth
+sign-in) silently does nothing. Give the launcher an app signature and make it
+the preferred app for those types:
+
+```sh
+# guest
+SIG=application/x-vnd.HaikuChrome
+addattr -t mime BEOS:APP_SIG $SIG $A/Chromium
+mimeset -apps -f $A/Chromium          # registers the signature with the launcher's path
+for t in application/x-vnd.Be.URL.http application/x-vnd.Be.URL.https text/html; do
+	setmime -set $t -preferredAppSig $SIG
+done
+# B_ARGV_ONLY: a script can't take B_REFS_RECEIVED, so opened files must
+# arrive as arguments (without it, opening an .html file gives a blank tab)
+g++ vm/appflags.cpp -o appflags -lbe && ./appflags $A/Chromium   # flags=0x9
+```
+
+With Chromium already running, the new instance hands the URL to it
+("Opening in existing browser session.") and the link opens as a new tab.
+
 Deskbar's running-app list shows the **executable's** file name and
 `BEOS:ICON` (the `Chromium` binary, not the launcher). It reads the icon once,
 when the app starts. Every deploy from Linux strips BFS attributes, so the launcher re-adds
@@ -406,6 +428,7 @@ the patches.
 |---|---|---|
 | `runtime_loader: Could not map image: Bad data` | lld's arm64 default `max-page-size` is 64 KB, which skews each segment's offset from its vaddr. Haiku arm64 needs them aligned to 4 KB. (The port patches its own clang driver for this; the bundled clang lacks the patch.) | `ldflags += ["-Wl,-z,max-page-size=4096"]` in `build/config/haiku:sdk`. Check that `llvm-readelf -l` shows LOAD align 0x1000. |
 | `DCHECK failed: message_center_bridge_` | DCHECKs are on in non-official builds, and `enable_chrome_notifications` is Mac/Win/Linux-only, so there was no notification bridge at all | A Haiku `NotificationPlatformBridge` that reports ready and drops notifications (`chrome/browser/haiku/chrome_browser_haiku.cc`) |
+| Double, triple or Shift/Ctrl-click aborts the browser: `FATAL:ui/events/event.cc:433] DCHECK failed: changed_button_flags_ == changed_button_flags_ & kChangedButtonFlagMask (67584 vs. 2048)` | `HaikuEventBridge::OnMouseDown` passed all event flags as `changed_button_flags`, including modifiers and `EF_IS_DOUBLE_CLICK` (1 << 16) | Pass only the button flags as changed; the click count (`EF_IS_DOUBLE_CLICK` / `EF_IS_TRIPLE_CLICK`) goes in `flags`. Fixed in `ui/ozone/platform/haiku/haiku_beapi.cc`. |
 | `Received signal 30 BUS_ADRALN 000000000000` | `-fsanitize=return` is trapping: a non-void function fell off the end of its `#if` chain on Haiku | Add the missing `#else return …`. Find them all with `grep "does not return a value"` in the ninja log. There were 2: `GlobalAcceleratorListener::GetInstance` and supervised_user_navigation_observer. |
 | Crash ~30 s after launch on the New Tab page: `wtf_string.cc:243 DCHECK failed: StringView("C") == setlocale(4, nullptr)` | Haiku's libroot always names the C locale `"POSIX"`. Nothing had changed the locale. | Expect `"POSIX"` under `BUILDFLAG(IS_HAIKU)` in `blink::String::Format`'s DCHECK |
 | Windows-style min/max/close drawn inside the window, under Haiku's own tab | `BrowserNativeWidgetAura::UseCustomFrame()` returns true, so `OpaqueBrowserFrameView` draws a full custom frame, but the shim's BWindow already has the Haiku decorator | Return false on Haiku. This is the "system title bar" mode: no caption buttons, so close, zoom and minimize (double-click the tab) come from the decorator. |
